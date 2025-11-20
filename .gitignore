@@ -1,0 +1,15 @@
+# misc
+.DS_Store
+*.pem
+
+# vscode
+.vscode
+
+# dependencies
+/node_modules
+
+# production
+/build
+
+# local env files
+.env*.local
