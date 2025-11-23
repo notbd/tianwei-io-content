@@ -54,7 +54,7 @@ export const posts = pgTable('posts', {
 
   title: text('title').notNull(),
   description: text('description'),
-  author: varchar('author', { length: 100 }),
+  author: varchar('author', { length: 100 }).notNull(),
 
   createdAt: timestamp('created_at', { mode: 'date' }).defaultNow(),
 
