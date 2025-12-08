@@ -1,0 +1,44 @@
+name: Deploy Content to Neon
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'content/**'
+      - 'drizzle/**'
+      - 'src/**'
+      - package.json
+
+  # Allow manual trigger from GitHub UI
+  workflow_dispatch:
+
+jobs:
+  sync-db:
+    runs-on: ubuntu-latest
+
+    env:
+      DATABASE_URL: ${{ secrets.PROD_REMOTE_DATABASE_URL }}
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v2
+        with:
+          version: 9
+
+      - name: Install Dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Push Schema to Neon
+        run: pnpm run db:push
+
+      - name: Sync Content to Neon
+        run: pnpm run sync:prod

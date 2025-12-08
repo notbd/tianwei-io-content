@@ -4,11 +4,11 @@ services:
     container_name: tianwei-io-content-local
     restart: always
     environment:
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${LOCAL_POSTGRES_USER}
+      POSTGRES_PASSWORD: ${LOCAL_POSTGRES_PASSWORD}
+      POSTGRES_DB: ${LOCAL_POSTGRES_DB}
     ports:
-      - '${FORWARDED_DB_PORT}:${CONTAINER_DB_PORT}'
+      - '${LOCAL_FORWARDED_DB_PORT}:${LOCAL_CONTAINER_DB_PORT}'
     healthcheck:
       test: [CMD-SHELL, pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB]
       interval: 5s

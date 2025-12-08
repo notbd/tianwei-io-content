@@ -8,18 +8,22 @@
   "license": "ISC",
   "keywords": [],
   "scripts": {
-    "dev:up": "pnpm db:up && pnpm db:migrate && pnpm content:start",
+    "dev:up": "pnpm db:up && pnpm db:push && pnpm content:start",
     "dev:down": "pnpm db:down",
-    "dev:reset": "pnpm db:reset && pnpm db:migrate && pnpm content:start",
+    "dev:reset": "pnpm db:reset && pnpm db:push && pnpm content:start",
 
     "db:up": "docker compose --env-file .env.local up -d",
     "db:down": "docker compose --env-file .env.local down",
     "db:reset": "docker compose --env-file .env.local down -v && pnpm db:up",
-    "db:migrate": "sleep 3 && pnpm drizzle-kit push",
+    "db:push": "sleep 1 && pnpm drizzle-kit push",
 
     "content:start": "tsx scripts/services.ts startLocalContentService",
     "content:init": "tsx scripts/services.ts runInitialSync",
     "content:watch": "tsx scripts/services.ts runContentWatcher",
+
+    "sync:prod": "tsx scripts/prod/sync-prod.ts",
+
+    "test:remote": "tsx tests/test-remote-sync.ts",
 
     "lint": "eslint",
     "lint:fix": "eslint --fix"

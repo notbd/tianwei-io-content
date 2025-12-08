@@ -1,0 +1,292 @@
+---
+title: How ikalendar2 Grew with Swift's Async Evolution
+description: Refactoring ikalendar2's network layer for Swift's modern concurrency features.
+createdAt: 2024-04-15
+author: Tianwei Zhang
+isPublished: true
+---
+
+Fetching and processing data from APIs plays a core part of what ikalendar2 does. Over the course of the project, I have gone through several iterations of handling asynchronous data in the app. This was driven both by my growing understanding of the frameworks and by Swift's own evolution in its concurrency tooling.
+
+1. #### Completion Handlers
+
+ikalendar2 started out using completion handlers to manage asynchronous data fetching and processing. This common Swift practice relies on callers passing **callback functions** to handle the output once a data task completes.
+
+Below is one example of how completion handlers were used in the NetworkManager class to fetch data, decode, and pass it back to the caller.
+
+```swift title="IkaNetworkManager.swift" /completion/
+final class IkaNetworkManager {
+
+  // ...other class members
+
+  private func fetchAndDecode<T>(
+    url: URL,
+    decodeUsing decoder: @escaping (Data) throws -> T,
+    completion: @escaping (Result<T, IkaError>) -> Void)
+  {
+    let task = URLSession.shared.dataTask(with: URLRequest(url: url)) { data, response, error in
+
+      if error != nil {
+        // device network issues
+        completion(.failure(.connectionError))
+        return
+      }
+
+      guard
+        let response = response as? HTTPURLResponse,
+        [200, 304].contains(response.statusCode)
+      else {
+        completion(.failure(.serverError(.badResponse)))
+        return
+      }
+
+      guard let data = data else {
+        completion(.failure(.serverError(.emptyData)))
+        return
+      }
+
+      do {
+        let decoded = try decoder(data)
+        // success
+        completion(.success(decoded))
+      }
+      catch {
+        completion(.failure(.serverError(.badData)))
+      }
+    }
+
+    // fire off data task
+    task.resume()
+  }
+}
+```
+
+The code should be self-explanatory. Note we use `@escaping` to ensure both the completion handler and the decoder function get their lifetime retained until after the asynchronous task finishes. And we use a convenience enum `Result` to encapsulate the success / failure status of the data task, since the same completion handler is used for both success and failure cases and we need a way to signal the caller about what to expect.
+
+Completion Handlers are a straightforward approach suitable for simple data tasks. However, they struggle to keep up as the data layer of the app grows in complexity. For example, it can lead to deeply nested callback functions and poor readability when chaining multiple asynchronous tasks together; also, the independence between each callback closure means that it's impossible to share states between them. Even though I did manage to make it work when starting out, I was actively seeking better solutions as the functionality of the app expanded.
+
+2. #### Combine
+
+As I delved deeper into SwiftUI fundamentals, I learned about the [Combine](https://developer.apple.com/documentation/combine) framework, which was introduced alongside SwiftUI as a structured way to handle events and data streams. It's built on top of a publisher-subscriber pattern and is the backbone that powers SwiftUI's reactive data flow and state management.
+
+I started exploring the possibilities of using Combine to manage the flow of asynchronous data tasks in ikalendar2.
+
+Now, for the previous example, in place of `IkaNetworkManager` class which returns data directly, we have a new class `IkaPublisherManager` that creates **publishers** emitting data and errors from the network calls. The caller can later subscribe to the publishers to receive the results.
+
+```swift title="IkaPublisherManager.swift"
+final class IkaPublisherManager {
+
+  // ...other class members
+
+  private func getFetchedAndDecodedDataPublisher<T>(
+    url: URL,
+    decodeUsing decoder: @escaping (Data) throws -> T)
+    -> AnyPublisher<T, IkaError>
+  {
+    return URLSession.shared.dataTaskPublisher(for: url)
+      .retry(1)
+      .tryMap { data, response in
+        guard
+          let response = response as? HTTPURLResponse,
+          [200, 304].contains(response.statusCode)
+        else {
+          throw IkaError.serverError(.badResponse)
+        }
+
+        do {
+          let decoded = try decoder(data)
+          // success
+          return decoded
+        }
+        catch {
+          throw IkaError.serverError(.badData)
+        }
+      }
+      .mapError { error in
+        switch error {
+        case is URLError:
+          return .connectionError
+        case let ikaError as IkaError:
+          // let through custom errors in `tryMap`
+          return ikaError
+        default:
+          return .unknownError
+        }
+      }
+      .receive(on: DispatchQueue.main)
+      .eraseToAnyPublisher()
+  }
+}
+```
+
+In our data model (caller), we initiate API calls by creating corresponding data publishers and start the subscription by providing subsequent operations to be executed when the data is resolved and published.
+
+```swift title="IkaCatalog.swift"
+final class IkaCatalog: ObservableObject {
+
+  // these are data directly referenced by the UI
+  @Published var battleRotationDict = BattleRotationDict()
+  @Published var salmonRotations = [SalmonRotation]()
+  @Published var salmonRewardApparelInfo = SalmonRewardApparelInfo()
+
+  private var dataTaskCancellables = Set<AnyCancellable>()
+
+  // ...other class members
+
+  private func loadCatalog() {
+    // these functions call `getFetchedAndDecodedDataPublisher()` internally
+    let battleRotationDictPublisher = IkaPublisherManager.shared.getBattleRotationDictPublisher()
+    let salmonRotationsPublisher = IkaPublisherManager.shared.getSalmonRotationsPublisher()
+    let salmonRewardApparelInfoPublisher = IkaPublisherManager.shared.getSalmonRewardApparelPublisher()
+
+    // zip the three publishers for parallel execution
+    let combinedPublisher = Publishers.Zip3(
+      battleRotationDictPublisher,
+      salmonRotationsPublisher,
+      salmonRewardApparelInfoPublisher)
+
+    // subscribe to the publisher
+    combinedPublisher
+      .receive(on: DispatchQueue.main)
+      .sink { completionStatus in
+        switch completionStatus {
+          case .failure(let ikaError):
+            self.markAsError(error: ikaError)
+          case .finished:
+            // clean-up
+            self.markAsLoaded()
+            self.cancelAutoLoadingStatus()
+            self.dataTaskCancellables.removeAll()
+        }
+      } receiveValue: { battleRotationDict, salmonRotations, salmonRewardApparelInfo in
+        // update the data model
+        DispatchQueue.main.async {
+          self.battleRotationDict = battleRotationDict
+          self.salmonRotations = salmonRotations
+          self.salmonRewardApparelInfo = salmonRewardApparelInfo
+        }
+      }
+      .store(in: &dataTaskCancellables)
+  }
+}
+```
+
+It is quite obvious that this pattern shares similarities with JavaScript **promises** in that the return value is abstracted behind a Publisher/Promise object, and will be resolved at some point in the future with an explicit success or failure status. 
+
+Compared to the completion handler approach, Combine offers a more declarative, readable way to perform asynchronous operations. However, it retains some of the issues which limit its scalability: for example, we resorted to a special `Publishers.Zip3` initializer to zip three data publishers together and wait for all to be resolved, but this solution being baked-in clearly shows parallelization is not going to scale well.
+
+<MdxImage
+  src="ikalendar2-dev-notes/combine-example"
+  width="1124"
+  height="740"
+  alt="Screenshot from Xcode documentation showing the limited number of publisher-combination operators available in Combine."
+  title="Limited Publisher-Combination Options in Combine"
+/>
+
+Furthermore, the design of Combine primarily targets persistent subscriptions and continuous data streams. Its tooling and paradigm are a bit overkill for our use case of one-at-a-time data fetching. Using Combine gradually became a burden because the proprietary mechanism had a deep learning curve and kept slowing development down. But unfortunately, other than Combine and completion handlers, there were no alternatives available in Swift at the time.
+
+3. #### Async/Await
+
+That changed when Apple finally introduced the support for async/await and structured concurrency in Swift 5.5 (released alongside iOS 15 in 2021). This long-awaited addition finally brought Swift in line with other modern languages, allowing the asynchronous code to be structured in a much nicer way with good readability. I was honestly surprised it took this long, but I knew I had to jump on board immediately.
+
+Revisiting our example, we go back to the `IkaNetworkManager` class since we don't need publishers anymore, then drop the completion handlers and instead mark the function as `async throws`. The function can now return the data directly, or throw an error that gets propagated to the caller, all without the need for a callback closure.
+
+```swift title="IkaNetworkManager.swift" /async/
+final class IkaNetworkManager {
+
+  // ...other class members
+
+  private func fetchAndDecode<T>(
+    url: URL,
+    decodeUsing decoder: (Data) throws -> T)
+    async throws -> T
+  {
+    let (data, response): (Data, URLResponse)
+
+    do {
+      (data, response) = try await URLSession.shared.data(from: url)
+    }
+    catch {
+      throw IkaError.connectionError
+    }
+
+    guard
+      let httpResponse = response as? HTTPURLResponse,
+      [200, 304].contains(httpResponse.statusCode)
+    else {
+      throw IkaError.serverError(.badResponse)
+    }
+
+    do {
+      let decoded = try decoder(data)
+      // success
+      return decoded
+    }
+    catch {
+      throw IkaError.serverError(.badData)
+    }
+  }
+}
+```
+
+Meanwhile, the caller's code sees even bigger improvements:
+
+```swift title="IkaCatalog.swift" /async/ /await/
+@MainActor
+@Observable
+final class IkaCatalog {
+
+  // these are data directly referenced by the UI
+  private(set) var battleRotationDict = BattleRotationDict()
+  private(set) var salmonRotations = [SalmonRotation]()
+  private(set) var salmonRewardApparelInfo = SalmonRewardApparelInfo()
+
+  // ...other class members
+
+  /// Function called to update the data model.
+  private func loadCatalog() async
+  {
+    await setLoadStatus(.loading)
+    do {
+      try await loadData()
+      await setLoadStatus(.loaded)
+    }
+    catch let error as IkaError {
+      await setLoadStatus(.error(error))
+    }
+    catch {
+      await setLoadStatus(.error(.unknownError))
+    }
+  }
+
+  /// Called internally by `loadCatalog()`.
+  private func loadData() async throws
+  {
+    // these functions call `fetchAndDecode()` internally
+    async let taskBattleRotationDict = IkaNetworkManager.shared.getBattleRotationDict() 
+    async let taskSalmonRotations = IkaNetworkManager.shared.getSalmonRotations()
+    async let taskSalmonRewardApparelInfo = IkaNetworkManager.shared.getSalmonRewardApparelInfo()
+
+    let loadedBattleRotationDict = try await taskBattleRotationDict
+    let loadedSalmonRotations = try await taskSalmonRotations
+    let loadedSalmonRewardApparelInfo = try await taskSalmonRewardApparelInfo
+
+    battleRotationDict = loadedBattleRotationDict
+    salmonRotations = loadedSalmonRotations
+    salmonRewardApparelInfo = loadedSalmonRewardApparelInfo
+  }
+}
+```
+
+Just look at how much cleaner it becomes. No more callbacks, no more `Publisher.Zip3`, everything is structured like synchronous code. We use `async let` to initiate the asynchronous tasks in parallel, and `await` them to all finish before using the results to update the data model.
+
+Note that we also adopt the new `@MainActor` property wrapper to ensure all class methods and the updates of all class properties (which are directly referenced by the UI) are going to be performed on the main thread, while not affecting the tasks initiated explicitly under the async context.
+
+The biggest benefit async/await brings us here is the readability and maintainability. The code is easy to write, easy to follow, and easy to scale, because it is written just like synchronous code. Error handling is also much cleaner, as we are able to throw and catch errors like we normally do.
+
+## Summary
+
+It may seem like excessive to go out of the way and implement all these completely different approaches to asynchronous data handling (plus actually deploy them in production), and it kind of is, but I'm glad I did and I'm having fun with it. ikalendar2 is not just a tool I built, it's also my learning and playing ground. I would not have gotten here if I weren't questioning my own implementations in the first place and keeping building things.
+
+As for the future development of ikalendar2, the introduction of async/await and Concurrency APIs has been a huge positive and is what I plan to stick with. It's much more **readable**, **maintainable**, and **scalable** than the previous approaches. Since Xcode 13.2 (released a few months after Swift 5.5's introduction), these concurrency features have even gained backward compatibility to earlier OS versions. There's really no reason for existing projects not to switch over, and I believe this is the best way to handle asynchronous code in Swift for all my projects going forward.
+

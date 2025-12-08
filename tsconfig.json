@@ -23,5 +23,5 @@
     "verbatimModuleSyntax": true,
     "skipLibCheck": true
   },
-  "include": ["drizzle", "scripts"]
+  "include": ["drizzle", "scripts", "tests"]
 }
