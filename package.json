@@ -11,21 +11,16 @@
     "dev:up": "pnpm db:up && pnpm db:push && pnpm content:start",
     "dev:down": "pnpm db:down",
     "dev:reset": "pnpm db:reset && pnpm db:push && pnpm content:start",
-
     "db:up": "docker compose --env-file .env.local up -d",
     "db:down": "docker compose --env-file .env.local down",
     "db:reset": "docker compose --env-file .env.local down -v && pnpm db:up",
     "db:push": "sleep 1 && pnpm drizzle-kit push",
-
     "content:start": "tsx scripts/services.ts startLocalContentService",
     "content:init": "tsx scripts/services.ts runInitialSync",
     "content:watch": "tsx scripts/services.ts runContentWatcher",
-
     "sync:prod": "tsx scripts/prod/sync-prod.ts",
     "frontend:revalidate": "tsx scripts/prod/revalidate-posts.ts",
-
     "test:remote": "tsx tests/test-remote-sync.ts",
-
     "lint": "eslint",
     "lint:fix": "eslint --fix"
   },
@@ -34,18 +29,18 @@
     "chokidar": "^4.0.3",
     "date-fns": "^4.1.0",
     "dotenv": "^17.2.3",
-    "drizzle-kit": "^0.31.7",
+    "drizzle-kit": "^0.31.8",
     "drizzle-orm": "^0.44.7",
     "gray-matter": "^4.0.3",
     "pg": "^8.16.3",
-    "tsx": "^4.20.6",
+    "tsx": "^4.21.0",
     "typescript": "^5.9.3"
   },
   "devDependencies": {
-    "@antfu/eslint-config": "^6.2.0",
-    "@types/node": "^24.10.1",
-    "@types/pg": "^8.15.6",
-    "eslint": "^9.38.0",
+    "@antfu/eslint-config": "^6.7.3",
+    "@types/node": "^24.10.4",
+    "@types/pg": "^8.16.0",
+    "eslint": "^9.39.2",
     "pg-format": "^1.0.4"
   }
 }
