@@ -22,6 +22,7 @@
     "content:watch": "tsx scripts/services.ts runContentWatcher",
 
     "sync:prod": "tsx scripts/prod/sync-prod.ts",
+    "frontend:revalidate": "tsx scripts/prod/revalidate-posts.ts",
 
     "test:remote": "tsx tests/test-remote-sync.ts",
 

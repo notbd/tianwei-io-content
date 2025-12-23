@@ -19,6 +19,8 @@ jobs:
 
     env:
       DATABASE_URL: ${{ secrets.PROD_REMOTE_DATABASE_URL }}
+      FRONTEND_URL: ${{ secrets.FRONTEND_URL }}
+      REVALIDATION_SECRET: ${{ secrets.REVALIDATION_SECRET }}
 
     steps:
       - name: Checkout Repository
@@ -42,3 +44,6 @@ jobs:
 
       - name: Sync Content to Neon
         run: pnpm run sync:prod
+
+      - name: Revalidate frontend content
+        run: pnpm run frontend:revalidate
