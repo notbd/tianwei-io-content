@@ -11,17 +11,40 @@ The content engine of my personal website [tianwei.io](https://tianwei.io).
 - **Database**: [PostgreSQL](https://www.postgresql.org)
 - **Remote DB Host**: [Neon](https://neon.tech)
 - **Content Format**: [MDX](https://mdxjs.com) files with frontmatter
-- **Infrastructure**: [Docker](https://www.docker.com) Compose (local Postgres), [GitHub Actions](https://docs.github.com/en/actions) (remote sync)
+- **Testing**: [Vitest](https://vitest.dev) + [PGlite](https://pglite.dev) (in-memory Postgres)
+- **Infrastructure**: [Docker](https://www.docker.com) Compose (local Postgres), [GitHub Actions](https://docs.github.com/en/actions) (CI + remote sync)
 
 <h2>Site Architecture</h2>
 
-- **[Frontend](https://github.com/notbd/tianwei.io)**: a Next.js application rendering content from the API dynamically using SSR with optimized caching strategies.
-- **[API Layer](https://github.com/notbd/tianwei-io-api)**: a Hono service (Node.js) that serves content data from the content engine via REST endpoints.
-- **[Content Engine](https://github.com/notbd/tianwei-io-content)**: a dedicated repo that stores, parses and syncs MDX to a remote PostgreSQL database.
+- **[Frontend](https://github.com/notbd/tianwei.io)**: a Next.js application rendering content from the API with static generation and on-demand revalidation.
+- **[API Layer](https://github.com/notbd/tianwei-io-api)**: a Hono service serving content data from the content engine via REST endpoints.
+- **[Content Engine](https://github.com/notbd/tianwei-io-content)**: this repo — stores, parses and syncs MDX to a remote PostgreSQL database.
 
 <h2>Overview</h2>
 
 ![Overview Visualization](./resources/overview-2.png)
+
+<h2>Layout</h2>
+
+| Path | Purpose |
+| --- | --- |
+| `content/{category}/{slug}.mdx` | The content itself; folder name → category, filename → slug |
+| `src/` | Library code: frontmatter parsing, transactional sync, file watcher |
+| `drizzle/` | Database schema |
+| `scripts/` | Thin CLI entry points (local dev, prod sync, frontend revalidation) |
+| `tests/` | Vitest suite — unit (parser) + integration (sync against PGlite) |
+
+<h2>Sync Semantics</h2>
+
+A sync is a single **transactional reconcile** (`src/sync.ts`):
+
+- Every `.mdx` file is parsed and validated first — any invalid file aborts the run before the database is touched.
+- Inside one transaction: all parsed posts are upserted (keyed on slug, so ids stay stable) and rows whose files no longer exist are deleted.
+- Readers never observe an empty or partially-synced table; renames can't leave orphaned rows.
+- A parse that yields zero posts is rejected unless `--allow-empty` is passed, so a bad checkout can never wipe the production table.
+- `createdAt` frontmatter is a calendar date authored in **`CONTENT_TIME_ZONE`** (`America/New_York`, see `src/config.ts`) and stored as the UTC instant of that zone's midnight — deterministic regardless of machine timezone. Optional `updatedAt` follows the same rules and must not precede `createdAt`. See [ADR-0003](./docs/adr/0003-content-time-zone.md).
+
+Design records live in [`docs/adr/`](./docs/adr/).
 
 <h2>Local Run</h2>
 
@@ -30,34 +53,42 @@ The content engine of my personal website [tianwei.io](https://tianwei.io).
 ```shell
 git clone git@github.com:notbd/tianwei-io-content.git
 cd tianwei-io-content
+cp .env.example .env.local # then fill in values
 pnpm install
 
-# Start local Postgres in Docker and run the content sync + watcher
-pnpm run dev:up
+# Start local Postgres in Docker, sync content, and watch for changes
+pnpm dev:up
 
 # After finishing, shut everything down cleanly
-pnpm run dev:down
+pnpm dev:down
 ```
 
-After `pnpm run dev:up`:
+After `pnpm dev:up`:
 
 - A fresh Postgres container is started and exposed at `localhost:5431`.
-- The sync scripts read all `.mdx` files and upsert them into the database as `posts` entries.
-- A watcher process keeps running to apply file changes to the DB in real-time.
+- All `.mdx` files are reconciled into the `posts` table.
+- A watcher (chokidar, debounced) re-reconciles on every content change.
 
-Database can be inspected with any SQL client as well.
+<h2>Scripts</h2>
+
+| Script | Purpose |
+| --- | --- |
+| `pnpm dev:up` / `dev:down` / `dev:reset` | Local Postgres lifecycle + sync + watch |
+| `pnpm content:sync` | One-shot local reconcile (no watcher) |
+| `pnpm sync:prod` | Production reconcile (requires `DATABASE_URL`) |
+| `pnpm frontend:revalidate` | Ask the frontend to revalidate its content cache |
+| `pnpm lint` / `typecheck` / `test` | Quality gates (same as CI) |
 
 <h2>Env Configuration</h2>
 
-This repo uses env variables for both setting up docker container in local development and setting up github actions for production sync and frontend revalidation. See `.env.example` for the full list.
+See `.env.example` for the full annotated list. Locally, `LOCAL_*` variables drive the Docker Postgres; in CI, `DATABASE_URL`, `FRONTEND_URL` and `REVALIDATION_SECRET` are provided as repository secrets.
 
 <h2>Content Sync to Prod</h2>
 
 Production sync is fully automated:
 
-- [Neon](https://neon.tech) Postgres is configured as the remote production database.
-- A dedicated script connects to Neon and performs a **one-shot sync** of all MDX content.
-- A GitHub Actions workflow (`.github/workflows/deploy-content.yml`) runs on every push to `main` and syncs the content to Neon and revalidates the frontend.
+- CI (`.github/workflows/ci.yml`) runs lint, typecheck and tests on every push and pull request.
+- On every push to `main` touching content or sync code, `.github/workflows/deploy-content.yml` re-runs the checks, applies pending migrations (`drizzle-kit migrate` — the committed history under `drizzle/migrations/`), performs the transactional reconcile against Neon, and revalidates the frontend cache. Deploys are serialized via a concurrency group.
 
 Result: the **remote database is always in sync** with the MDX content stored in the `main` branch of this repo.
 
