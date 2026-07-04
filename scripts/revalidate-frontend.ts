@@ -29,7 +29,14 @@ async function triggerRevalidation(frontend: URL, secret: string) {
     throw new Error(`[revalidate] Failed (${response.status}): ${message}`)
   }
 
-  const payload = await response.json()
+  const payload = await response.json() as { success?: boolean, error?: string }
+
+  // A 207 Multi-Status (revalidated but warming failed) counts as ok by
+  // response.ok — check the payload so a cold cache fails the deploy loudly.
+  if (payload.success !== true) {
+    throw new Error(`[revalidate] Partial failure (${response.status}): ${JSON.stringify(payload)}`)
+  }
+
   console.info('[revalidate] Success:', payload)
 }
 

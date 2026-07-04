@@ -2,45 +2,50 @@
   "name": "tianwei-io-content",
   "type": "module",
   "version": "1.0.0",
+  "private": true,
   "packageManager": "pnpm@10.23.0",
-  "description": "",
-  "author": "",
-  "license": "ISC",
-  "keywords": [],
+  "description": "Content engine for tianwei.io — parses MDX content and syncs it to Postgres",
+  "author": "Tianwei Zhang",
+  "license": "AGPL-3.0-only",
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
-    "dev:up": "pnpm db:up && pnpm db:push && pnpm content:start",
+    "dev:up": "pnpm db:up && pnpm db:migrate && pnpm content:start",
     "dev:down": "pnpm db:down",
-    "dev:reset": "pnpm db:reset && pnpm db:push && pnpm content:start",
-    "db:up": "docker compose --env-file .env.local up -d",
+    "dev:reset": "pnpm db:reset && pnpm db:migrate && pnpm content:start",
+    "db:up": "docker compose --env-file .env.local up -d --wait",
     "db:down": "docker compose --env-file .env.local down",
     "db:reset": "docker compose --env-file .env.local down -v && pnpm db:up",
-    "db:push": "sleep 1 && pnpm drizzle-kit push",
-    "content:start": "tsx scripts/services.ts startLocalContentService",
-    "content:init": "tsx scripts/services.ts runInitialSync",
-    "content:watch": "tsx scripts/services.ts runContentWatcher",
-    "sync:prod": "tsx scripts/prod/sync-prod.ts",
-    "frontend:revalidate": "tsx scripts/prod/revalidate-posts.ts",
-    "test:remote": "tsx tests/test-remote-sync.ts",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate",
+    "content:start": "tsx scripts/local-dev.ts",
+    "content:sync": "tsx scripts/local-dev.ts --no-watch",
+    "sync:prod": "tsx scripts/sync-prod.ts",
+    "frontend:revalidate": "tsx scripts/revalidate-frontend.ts",
     "lint": "eslint",
-    "lint:fix": "eslint --fix"
+    "lint:fix": "eslint --fix",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@sindresorhus/slugify": "^3.0.0",
     "chokidar": "^4.0.3",
-    "date-fns": "^4.1.0",
     "dotenv": "^17.2.3",
-    "drizzle-kit": "^0.31.8",
     "drizzle-orm": "^0.44.7",
     "gray-matter": "^4.0.3",
-    "pg": "^8.16.3",
-    "tsx": "^4.21.0",
-    "typescript": "^5.9.3"
+    "pg": "^8.16.3"
   },
   "devDependencies": {
     "@antfu/eslint-config": "^6.7.3",
+    "@electric-sql/pglite": "^0.3.14",
     "@types/node": "^24.10.4",
     "@types/pg": "^8.16.0",
+    "drizzle-kit": "^0.31.8",
     "eslint": "^9.39.2",
-    "pg-format": "^1.0.4"
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4"
   }
 }
