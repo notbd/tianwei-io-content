@@ -15,8 +15,7 @@
 .env*
 !.env.example
 
-# Drizzle ORM auto‑generated files
-drizzle/migrations/schema.ts
-drizzle/migrations/relations.ts
-drizzle/migrations/meta/
+# Drizzle
+# NOTE: drizzle/migrations/ (including meta/) is committed — it is the
+# migration history the production database depends on.
 drizzle/.cache/

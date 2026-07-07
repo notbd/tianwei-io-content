@@ -4,13 +4,9 @@
     "target": "esnext",
     "lib": ["esnext"],
     "moduleDetection": "force",
-    "baseUrl": ".",
     "rootDir": ".",
     "module": "nodenext",
     "moduleResolution": "nodenext",
-    "paths": {
-      "@/*": ["./*"]
-    },
     "types": ["node"],
     "allowImportingTsExtensions": true,
     "strict": true,
@@ -23,5 +19,6 @@
     "verbatimModuleSyntax": true,
     "skipLibCheck": true
   },
-  "include": ["drizzle", "scripts", "tests"]
+  "include": ["drizzle", "src", "scripts", "tests", "drizzle.config.ts", "vitest.config.ts"],
+  "exclude": ["drizzle/migrations"]
 }
