@@ -32,20 +32,20 @@
   "dependencies": {
     "@sindresorhus/slugify": "^3.0.0",
     "chokidar": "^4.0.3",
-    "dotenv": "^17.2.3",
+    "dotenv": "^17.4.2",
     "drizzle-orm": "^0.44.7",
     "gray-matter": "^4.0.3",
-    "pg": "^8.16.3"
+    "pg": "^8.22.0"
   },
   "devDependencies": {
     "@antfu/eslint-config": "^6.7.3",
-    "@electric-sql/pglite": "^0.3.14",
-    "@types/node": "^24.10.4",
-    "@types/pg": "^8.16.0",
-    "drizzle-kit": "^0.31.8",
-    "eslint": "^9.39.2",
-    "tsx": "^4.21.0",
+    "@electric-sql/pglite": "^0.3.16",
+    "@types/node": "^24.13.2",
+    "@types/pg": "^8.20.0",
+    "drizzle-kit": "^0.31.10",
+    "eslint": "^9.39.4",
+    "tsx": "^4.23.0",
     "typescript": "^5.9.3",
-    "vitest": "^3.2.4"
+    "vitest": "^3.2.7"
   }
 }
