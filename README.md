@@ -2,6 +2,9 @@
 <samp>
 <h1>tianwei-io-content</h1>
 
+[![CI](https://github.com/notbd/tianwei-io-content/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/notbd/tianwei-io-content/actions/workflows/ci.yml)
+[![Deploy](https://github.com/notbd/tianwei-io-content/actions/workflows/deploy-content.yml/badge.svg?branch=main)](https://github.com/notbd/tianwei-io-content/actions/workflows/deploy-content.yml)
+
 The content engine of my personal website [tianwei.io](https://tianwei.io).
 
 <h2>Stack</h2>
@@ -17,12 +20,17 @@ The content engine of my personal website [tianwei.io](https://tianwei.io).
 <h2>Site Architecture</h2>
 
 - **[Frontend](https://github.com/notbd/tianwei.io)**: a Next.js application rendering content from the API with static generation and on-demand revalidation.
-- **[API Layer](https://github.com/notbd/tianwei-io-api)**: a Hono service serving content data from the content engine via REST endpoints.
+- **[API Layer](https://github.com/notbd/tianwei-io-api)**: a Hono service on Cloudflare Workers serving content data from the content engine via REST endpoints.
 - **[Content Engine](https://github.com/notbd/tianwei-io-content)**: this repo — stores, parses and syncs MDX to a remote PostgreSQL database.
 
 <h2>Overview</h2>
 
 ![Overview Visualization](./resources/overview-2.png)
+
+> Historical sketch from the original design — some details have since
+> evolved (category is now `varchar`, `updated_at` exists, sync is one
+> transactional reconcile in `src/`). The sections below are the current
+> source of truth.
 
 <h2>Layout</h2>
 
@@ -30,7 +38,7 @@ The content engine of my personal website [tianwei.io](https://tianwei.io).
 | --- | --- |
 | `content/{category}/{slug}.mdx` | The content itself; folder name → category, filename → slug |
 | `src/` | Library code: frontmatter parsing, transactional sync, file watcher |
-| `drizzle/` | Database schema |
+| `drizzle/` | Database schema + committed migration history (`migrations/`) |
 | `scripts/` | Thin CLI entry points (local dev, prod sync, frontend revalidation) |
 | `tests/` | Vitest suite — unit (parser) + integration (sync against PGlite) |
 
@@ -48,7 +56,7 @@ Design records live in [`docs/adr/`](./docs/adr/).
 
 <h2>Local Run</h2>
 
-- Make sure **Docker** is installed.
+Prerequisites: **Node.js ≥ 22**, **pnpm 10**, and **Docker**.
 
 ```shell
 git clone git@github.com:notbd/tianwei-io-content.git
@@ -76,12 +84,13 @@ After `pnpm dev:up`:
 | `pnpm dev:up` / `dev:down` / `dev:reset` | Local Postgres lifecycle + sync + watch |
 | `pnpm content:sync` | One-shot local reconcile (no watcher) |
 | `pnpm sync:prod` | Production reconcile (requires `DATABASE_URL`) |
+| `pnpm db:generate` / `db:migrate` | Generate a migration from schema changes / apply pending migrations |
 | `pnpm frontend:revalidate` | Ask the frontend to revalidate its content cache |
 | `pnpm lint` / `typecheck` / `test` | Quality gates (same as CI) |
 
 <h2>Env Configuration</h2>
 
-See `.env.example` for the full annotated list. Locally, `LOCAL_*` variables drive the Docker Postgres; in CI, `DATABASE_URL`, `FRONTEND_URL` and `REVALIDATION_SECRET` are provided as repository secrets.
+See `.env.example` for the full annotated list. Locally, `LOCAL_*` variables drive the Docker Postgres. In CI, the deploy workflow maps repository secrets to env: `PROD_REMOTE_DATABASE_URL` → `DATABASE_URL`, plus `FRONTEND_URL` and `REVALIDATION_SECRET`.
 
 <h2>Content Sync to Prod</h2>
 
