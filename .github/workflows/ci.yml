@@ -1,9 +1,10 @@
 name: CI
 
+# PRs only: pushes to dev update their PR (synchronize) and pushes to main
+# re-run these checks inside deploy-content.yml — push triggers here would
+# double-run everything.
 on:
   pull_request:
-  push:
-    branches: [main, dev]
 
 jobs:
   checks:

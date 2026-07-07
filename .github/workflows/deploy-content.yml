@@ -8,6 +8,8 @@ on:
       - 'drizzle/**'
       - 'src/**'
       - 'scripts/**'
+      - drizzle.config.ts
+      - .github/workflows/deploy-content.yml
       - package.json
       - pnpm-lock.yaml
   # Allow manual trigger from GitHub UI

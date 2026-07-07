@@ -41,10 +41,23 @@ async function main() {
 
   const watcher = watchContent(db)
 
+  // Idempotent: a second Ctrl+C while the first shutdown drains an
+  // in-flight reconcile must not re-enter pool.end() (which rejects on
+  // repeat calls and would crash the process with an unhandled rejection).
+  let shuttingDown = false
   const shutdown = async () => {
+    if (shuttingDown)
+      return
+    shuttingDown = true
     console.info('\n[local-dev] Shutting down...')
-    await watcher.close()
-    await pool.end()
+    try {
+      await watcher.close()
+      await pool.end()
+    }
+    catch (err) {
+      console.error('[local-dev] Error during shutdown:', err)
+      process.exit(1)
+    }
     console.info('[local-dev] Done. (Run `pnpm dev:down` to stop the DB container if needed.)')
     process.exit(0)
   }

@@ -22,14 +22,24 @@ async function triggerRevalidation(frontend: URL, secret: string) {
       'authorization': `Bearer ${secret}`,
     },
     body: JSON.stringify({ tags: ['posts'] }),
+    // a hung frontend must fail the deploy step, not stall it for minutes
+    signal: AbortSignal.timeout(60_000),
   })
 
+  const rawBody = await response.text()
+
   if (!response.ok) {
-    const message = await response.text()
-    throw new Error(`[revalidate] Failed (${response.status}): ${message}`)
+    throw new Error(`[revalidate] Failed (${response.status}): ${rawBody}`)
   }
 
-  const payload = await response.json() as { success?: boolean, error?: string }
+  let payload: { success?: boolean, error?: string }
+  try {
+    payload = JSON.parse(rawBody) as { success?: boolean, error?: string }
+  }
+  catch {
+    // e.g. a proxy/CDN HTML error page with a 2xx status
+    throw new Error(`[revalidate] Non-JSON response (${response.status}) from ${endpoint}: ${rawBody.slice(0, 300)}`)
+  }
 
   // A 207 Multi-Status (revalidated but warming failed) counts as ok by
   // response.ok — check the payload so a cold cache fails the deploy loudly.

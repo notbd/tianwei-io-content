@@ -1,3 +1,4 @@
+import { Buffer } from 'node:buffer'
 import fs from 'node:fs'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -111,6 +112,26 @@ describe('parseMdxFile', () => {
     root = makeContentDir({ 'floating.mdx': mdxDoc() })
     expect(() => parseMdxFile(path.join(root, 'floating.mdx'), root))
       .toThrow(/Invalid content path/)
+  })
+
+  it('names the file when the YAML itself is malformed', () => {
+    root = makeContentDir({ 'articles/broken.mdx': '---\ntitle: [unclosed\n---\nBody\n' })
+    expect(() => parseMdxFile(path.join(root, 'articles/broken.mdx'), root))
+      .toThrow(/Invalid frontmatter YAML in ".*broken\.mdx"/)
+  })
+
+  it('rejects an over-long author (varchar limit)', () => {
+    root = makeContentDir({ 'articles/a.mdx': mdxDoc({ author: 'a'.repeat(120) }) })
+    expect(() => parseMdxFile(path.join(root, 'articles/a.mdx'), root))
+      .toThrow(/author: exceeds 100 characters/)
+  })
+
+  it('rejects files containing invalid UTF-8 replacement characters', () => {
+    root = makeContentDir({ 'articles/a.mdx': mdxDoc() })
+    // simulate a Latin-1 file: write raw bytes that are invalid UTF-8
+    fs.writeFileSync(path.join(root, 'articles/latin1.mdx'), Buffer.from([0x2D, 0x2D, 0x2D, 0x0A, 0xE9, 0x0A]))
+    expect(() => parseMdxFile(path.join(root, 'articles/latin1.mdx'), root))
+      .toThrow(/invalid UTF-8/)
   })
 })
 

@@ -15,6 +15,8 @@ export interface WatchOptions {
 }
 
 export interface ContentWatcher {
+  /** Resolves once chokidar's initial scan is done and events are live. */
+  ready: Promise<void>
   close: () => Promise<void>
 }
 
@@ -90,9 +92,18 @@ export function watchContent(db: Db, options: WatchOptions = {}): ContentWatcher
     console.error('[watcher] Watch error:', err)
   })
 
-  console.info(`[watcher] Watching ${contentRoot} for MDX changes...`)
+  // Events fired during chokidar's initial scan are swallowed by
+  // ignoreInitial — callers that mutate files right after starting the
+  // watcher (tests, scripted flows) must await this first.
+  const ready = new Promise<void>((resolve) => {
+    watcher.on('ready', () => {
+      console.info(`[watcher] Watching ${contentRoot} for MDX changes...`)
+      resolve()
+    })
+  })
 
   return {
+    ready,
     async close() {
       closed = true
       clearTimeout(timer)

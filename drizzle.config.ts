@@ -11,6 +11,13 @@ dotenv.config({ path: '.env.local', quiet: true })
  */
 const remoteUrl = process.env.DATABASE_URL
 
+if (remoteUrl === undefined && process.env.LOCAL_POSTGRES_USER === undefined) {
+  throw new Error(
+    '[drizzle.config] Neither DATABASE_URL nor LOCAL_POSTGRES_* is set — '
+    + 'copy .env.example to .env.local for local development.',
+  )
+}
+
 export default {
   schema: './drizzle/schema.ts',
   out: './drizzle/migrations',

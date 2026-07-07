@@ -4,10 +4,16 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { validateMdxFileStructure } from '../../src/parser.ts'
 import { makeContentDir, mdxDoc } from '../helpers/fixture-content.ts'
 
-let root: string
+let root = ''
+let root2 = ''
 
 afterEach(() => {
-  fs.rmSync(root, { recursive: true, force: true })
+  for (const dir of [root, root2]) {
+    if (dir !== '')
+      fs.rmSync(dir, { recursive: true, force: true })
+  }
+  root = ''
+  root2 = ''
 })
 
 describe('validateMdxFileStructure', () => {
@@ -52,5 +58,27 @@ describe('validateMdxFileStructure', () => {
     root = makeContentDir({ articles: 'i am a file' })
     const result = validateMdxFileStructure(path.join(root, 'articles/post.mdx'), root)
     expect(result).toMatchObject({ ok: false, reason: expect.stringContaining('not a directory') })
+  })
+
+  it('rejects names that slugify to empty strings', () => {
+    root = makeContentDir({ 'articles/---.mdx': mdxDoc() })
+    expect(validateMdxFileStructure(path.join(root, 'articles/---.mdx'), root))
+      .toMatchObject({ ok: false, reason: expect.stringContaining('empty slug') })
+
+    root2 = makeContentDir({ '日本語/post.mdx': mdxDoc() })
+    expect(validateMdxFileStructure(path.join(root2, '日本語/post.mdx'), root2))
+      .toMatchObject({ ok: false, reason: expect.stringContaining('empty string') })
+  })
+
+  it('rejects slugs and categories exceeding the varchar column limits', () => {
+    const longName = 'a'.repeat(250)
+    root = makeContentDir({ [`articles/${longName}.mdx`]: mdxDoc() })
+    expect(validateMdxFileStructure(path.join(root, `articles/${longName}.mdx`), root))
+      .toMatchObject({ ok: false, reason: expect.stringContaining('max 200') })
+
+    const longCategory = 'c'.repeat(150)
+    root2 = makeContentDir({ [`${longCategory}/post.mdx`]: mdxDoc() })
+    expect(validateMdxFileStructure(path.join(root2, `${longCategory}/post.mdx`), root2))
+      .toMatchObject({ ok: false, reason: expect.stringContaining('max 100') })
   })
 })

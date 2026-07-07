@@ -17,10 +17,19 @@ import * as schema from '../drizzle/schema.ts'
 export function createDb() {
   const remoteUrl = process.env.DATABASE_URL
 
+  if (remoteUrl === undefined && process.env.LOCAL_POSTGRES_USER === undefined) {
+    throw new Error(
+      '[db] Neither DATABASE_URL nor LOCAL_POSTGRES_* is set — '
+      + 'copy .env.example to .env.local for local development.',
+    )
+  }
+
   const pool = remoteUrl
     ? new Pool({
         connectionString: remoteUrl,
-        ssl: { rejectUnauthorized: false },
+        // verify certificates (Neon serves public-CA certs);
+        // rejectUnauthorized:false would silently disable TLS verification
+        ssl: true,
       })
     : new Pool({
         host: 'localhost',

@@ -55,10 +55,14 @@ export async function syncPosts(db: Db, options: SyncOptions = {}): Promise<Sync
       .map(row => row.slug)
       .filter(slug => !diskSlugs.has(slug))
 
-    if (records.length > 0) {
+    // Chunked to stay far below the Postgres wire-protocol limit of 65535
+    // bind parameters per statement (9 params/row → hard ceiling ~7280 rows).
+    const UPSERT_CHUNK_SIZE = 1000
+    for (let offset = 0; offset < records.length; offset += UPSERT_CHUNK_SIZE) {
+      const chunk = records.slice(offset, offset + UPSERT_CHUNK_SIZE)
       await tx
         .insert(posts)
-        .values(records.map(record => ({
+        .values(chunk.map(record => ({
           slug: record.slug,
           category: record.category,
           title: record.title,

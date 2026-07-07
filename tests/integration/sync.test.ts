@@ -6,7 +6,7 @@ import { syncPosts } from '../../src/sync.ts'
 import { makeContentDir, mdxDoc } from '../helpers/fixture-content.ts'
 import { createTestDb } from '../helpers/test-db.ts'
 
-let root: string
+let root = '' // '' = not created; guards afterEach when makeContentDir throws
 let testDb: Awaited<ReturnType<typeof createTestDb>>
 
 beforeEach(async () => {
@@ -14,7 +14,10 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
-  fs.rmSync(root, { recursive: true, force: true })
+  if (root !== '') {
+    fs.rmSync(root, { recursive: true, force: true })
+    root = ''
+  }
   await testDb.client.close()
 })
 

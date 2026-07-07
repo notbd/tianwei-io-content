@@ -67,6 +67,13 @@ export function parseFrontmatterDate(value: unknown): Date {
   if (value instanceof Date) {
     if (Number.isNaN(value.getTime()))
       throw new Error(`[parser/date] Invalid Date instance`)
+    // js-yaml only yields a non-midnight Date when the frontmatter had a
+    // time/zone component (e.g. `2024-01-05 23:00:00-05:00`) — silently
+    // truncating that to a calendar date could shift it by a day.
+    if (value.getUTCHours() !== 0 || value.getUTCMinutes() !== 0
+      || value.getUTCSeconds() !== 0 || value.getUTCMilliseconds() !== 0) {
+      throw new Error(`[parser/date] Got a timestamp (${value.toISOString()}); expected a date-only 'yyyy-MM-dd'`)
+    }
     year = value.getUTCFullYear()
     month = value.getUTCMonth() + 1
     day = value.getUTCDate()
@@ -133,11 +140,22 @@ export function validateMdxFileStructure(
   if (!rawFilename.toLowerCase().endsWith('.mdx'))
     return { ok: false, reason: `invalid file type "${rawFilename}": expected an .mdx file` }
 
-  return {
-    ok: true,
-    category: slugify(rawCategory),
-    slug: slugify(path.basename(rawFilename, path.extname(rawFilename))),
-  }
+  // slugify can yield '' (e.g. symbol-only or non-Latin names), and the DB
+  // columns are varchar(200)/varchar(100) — catch both here, in the parse
+  // phase, so a bad name can never abort the sync transaction midway.
+  const category = slugify(rawCategory)
+  const slug = slugify(path.basename(rawFilename, path.extname(rawFilename)))
+
+  if (category.length === 0)
+    return { ok: false, reason: `category "${rawCategory}" slugifies to an empty string` }
+  if (category.length > 100)
+    return { ok: false, reason: `category "${rawCategory}" slugifies to ${category.length} chars (max 100)` }
+  if (slug.length === 0)
+    return { ok: false, reason: `filename "${rawFilename}" slugifies to an empty slug` }
+  if (slug.length > 200)
+    return { ok: false, reason: `filename "${rawFilename}" slugifies to a ${slug.length}-char slug (max 200)` }
+
+  return { ok: true, category, slug }
 }
 
 /**
@@ -153,7 +171,21 @@ export function parseMdxFile(
     throw new Error(`[parser] Invalid content path "${filePath}": ${structure.reason}`)
 
   const raw = fs.readFileSync(filePath, 'utf-8')
-  const { data, content } = matter(raw)
+
+  // readFileSync('utf-8') replaces invalid bytes with U+FFFD instead of
+  // erroring — a wrongly-encoded file would otherwise sync mojibake.
+  if (raw.includes('�'))
+    throw new Error(`[parser] "${filePath}" contains invalid UTF-8 (found U+FFFD replacement characters)`)
+
+  let data: ReturnType<typeof matter>['data']
+  let content: string
+  try {
+    ({ data, content } = matter(raw))
+  }
+  catch (err) {
+    // js-yaml errors carry a line number but no file — add the path
+    throw new Error(`[parser] Invalid frontmatter YAML in "${filePath}": ${(err as Error).message}`)
+  }
 
   const errors: string[] = []
 
@@ -165,6 +197,8 @@ export function parseMdxFile(
 
   if (!data.author || typeof data.author !== 'string')
     errors.push(`author: expected a non-empty string`)
+  else if (data.author.length > 100)
+    errors.push(`author: exceeds 100 characters (varchar limit)`)
 
   let createdAt: Date | undefined
   try {
@@ -222,7 +256,9 @@ export function parseAllPosts(contentRoot: string = CONTENT_ROOT): ContentRecord
 
   const categories = fs
     .readdirSync(contentRoot, { withFileTypes: true })
-    .filter(dirent => dirent.isDirectory())
+    // follow symlinked category dirs too — isDirectory() is false for them
+    .filter(dirent => dirent.isDirectory()
+      || (dirent.isSymbolicLink() && fs.statSync(path.join(contentRoot, dirent.name)).isDirectory()))
     .map(dirent => dirent.name)
 
   const records: ContentRecord[] = []

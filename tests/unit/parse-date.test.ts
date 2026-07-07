@@ -71,6 +71,13 @@ describe('parseFrontmatterDate', () => {
     expect(() => parseFrontmatterDate(new Date('nonsense'))).toThrow(/Invalid Date/)
   })
 
+  it('rejects Date instances with a time component (YAML timestamps)', () => {
+    // `createdAt: 2024-01-05 23:00:00-05:00` in YAML yields 2024-01-06T04:00Z —
+    // silently truncating to a calendar date would shift the authored day.
+    const timestamp = new Date(Date.UTC(2024, 0, 6, 4))
+    expect(() => parseFrontmatterDate(timestamp)).toThrow(/Got a timestamp/)
+  })
+
   it.each([
     '2024/06/15',
     '15-06-2024',
