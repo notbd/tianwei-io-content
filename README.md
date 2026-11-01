@@ -49,6 +49,7 @@ A sync is a single **transactional reconcile** (`src/sync.ts`):
 - Every `.mdx` file is parsed and validated first — any invalid file aborts the run before the database is touched.
 - Inside one transaction: all parsed posts are upserted (keyed on slug, so ids stay stable) and rows whose files no longer exist are deleted.
 - Readers never observe an empty or partially-synced table; renames can't leave orphaned rows.
+- Concurrent syncs (e.g. a manual `sync:prod` during a deploy) are serialized by a transaction-scoped Postgres advisory lock, so they never interleave.
 - A parse that yields zero posts is rejected unless `--allow-empty` is passed, so a bad checkout can never wipe the production table.
 - `createdAt` frontmatter is a calendar date authored in **`CONTENT_TIME_ZONE`** (`America/New_York`, see `src/config.ts`) and stored as the UTC instant of that zone's midnight — deterministic regardless of machine timezone. Optional `updatedAt` follows the same rules and must not precede `createdAt`. See [ADR-0003](./docs/adr/0003-content-time-zone.md).
 
