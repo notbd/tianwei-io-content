@@ -128,6 +128,36 @@ describe('parseMdxFile', () => {
     expect(run).toThrow(/isPublished/)
   })
 
+  it('rejects an MDX body the frontend cannot compile, naming the file line', () => {
+    // mdxDoc's frontmatter takes lines 1-8, so the body starts at line 9
+    root = makeContentDir({
+      'articles/a.mdx': mdxDoc({ body: 'Fine.\n\nAn <b>unclosed tag.\n' }),
+    })
+    expect(() => parseMdxFile(path.join(root, 'articles/a.mdx'), root))
+      .toThrow(/body: MDX syntax error at line 11: Expected a closing tag for `<b>` before the end of `paragraph`/)
+  })
+
+  it.each([
+    ['an import', 'import x from \'y\'\n\nText.\n', 'mdxjsEsm'],
+    ['an inline expression', 'Two is {1 + 1}.\n', 'mdxTextExpression'],
+    ['a flow expression', '{1 + 1}\n', 'mdxFlowExpression'],
+    ['an expression prop', '<MdxImage src="a" width={480} />\n', 'an expression or spread prop'],
+    ['a spread prop', '<MdxImage {...props} />\n', 'an expression or spread prop'],
+  ])('rejects JavaScript in the body: %s', (_name, body, kind) => {
+    root = makeContentDir({
+      'articles/a.mdx': mdxDoc({ body }),
+    })
+    expect(() => parseMdxFile(path.join(root, 'articles/a.mdx'), root))
+      .toThrow(`body: JavaScript is not allowed in posts at line 9 (${kind})`)
+  })
+
+  it('accepts components with string props', () => {
+    root = makeContentDir({
+      'articles/a.mdx': mdxDoc({ body: '<MdxImage src="a/b" width="480" height="320" alt="An image" />\n' }),
+    })
+    expect(parseMdxFile(path.join(root, 'articles/a.mdx'), root).content).toContain('<MdxImage')
+  })
+
   it('throws on structurally invalid paths', () => {
     root = makeContentDir({
       'floating.mdx': mdxDoc(),

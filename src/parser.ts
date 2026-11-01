@@ -1,6 +1,8 @@
+import type { Root } from 'mdast'
 import type { ContentRecord, StructureResult } from './types.ts'
 import fs from 'node:fs'
 import path from 'node:path'
+import { createProcessor } from '@mdx-js/mdx'
 import slugify from '@sindresorhus/slugify'
 import matter from 'gray-matter'
 import yaml from 'js-yaml'
@@ -76,6 +78,55 @@ const FRONTMATTER_OPTIONS = {
   },
 }
 
+// The frontend compiles post bodies with @mdx-js/mdx and refuses to run any
+// JavaScript in them (tianwei.io src/lib/mdx.tsx). Checking the same here
+// keeps a body it cannot render out of the database: otherwise the sync
+// succeeds and that post's page fails in production.
+const mdxParser = createProcessor()
+const JAVASCRIPT_NODES = new Set(['mdxjsEsm', 'mdxFlowExpression', 'mdxTextExpression'])
+
+interface MdxNode {
+  type: string
+  children?: MdxNode[]
+  attributes?: { type: string, value?: unknown }[]
+  position?: { start: { line: number } }
+}
+
+/**
+ * Why the frontend could not render this MDX body, if it could not: a
+ * syntax error, or JavaScript (import/export, `{expression}`, `prop={value}`,
+ * `{...spread}`). Line numbers count from the top of the file.
+ */
+function mdxBodyErrors(body: string, linesBeforeBody: number): string[] {
+  let tree: Root
+  try {
+    tree = mdxParser.parse(body)
+  }
+  catch (err) {
+    // a VFileMessage: `line` is relative to the body, `reason` carries body positions too
+    const { line, reason } = err as { line?: number, reason?: string }
+    const where = line === undefined
+      ? ''
+      : ` at line ${linesBeforeBody + line}`
+    return [`body: MDX syntax error${where}: ${(reason ?? String(err)).replace(/ \(\d+:\d+(?:-\d+:\d+)?\)/, '')}`]
+  }
+
+  const errors: string[] = []
+  const visit = (node: MdxNode): void => {
+    const jsAttribute = node.attributes?.some(attribute => attribute.type === 'mdxJsxExpressionAttribute'
+      || (typeof attribute.value === 'object' && attribute.value !== null)) === true
+    if (JAVASCRIPT_NODES.has(node.type) || jsAttribute) {
+      const line = node.position === undefined
+        ? ''
+        : ` at line ${linesBeforeBody + node.position.start.line}`
+      errors.push(`body: JavaScript is not allowed in posts${line} (${jsAttribute ? 'an expression or spread prop' : node.type}); give components string props`)
+    }
+    node.children?.forEach(visit)
+  }
+  visit(tree as MdxNode)
+  return errors
+}
+
 /**
  * Parse a single MDX file into a ContentRecord.
  * Throws with an aggregated message listing every invalid frontmatter field.
@@ -141,8 +192,12 @@ export function parseMdxFile(
   if (typeof data.isPublished !== 'boolean')
     errors.push(`isPublished: expected a boolean`)
 
+  // gray-matter's content is the file after the closing '---'
+  const linesBeforeBody = raw.slice(0, raw.length - content.length).split('\n').length - 1
+  errors.push(...mdxBodyErrors(content, linesBeforeBody))
+
   if (errors.length > 0 || createdAt === undefined)
-    throw new Error(`[parser] Invalid frontmatter in "${filePath}":\n  - ${errors.join('\n  - ')}`)
+    throw new Error(`[parser] Invalid post "${filePath}":\n  - ${errors.join('\n  - ')}`)
 
   return {
     slug: structure.slug,
