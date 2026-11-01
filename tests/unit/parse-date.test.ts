@@ -71,31 +71,13 @@ describe('parseFrontmatterDate', () => {
     expect(parseFrontmatterDate(' 2024-06-15 ').getTime()).toBe(Date.UTC(2024, 5, 15, 4))
   })
 
-  it('re-anchors Date instances (js-yaml unquoted dates) by calendar date', () => {
-    // js-yaml parses unquoted `2025-10-23` as UTC midnight; only the
-    // calendar date is meaningful, so it lands on content-zone midnight.
-    const yamlDate = new Date(Date.UTC(2025, 9, 23))
-    const parsed = parseFrontmatterDate(yamlDate)
-    expect(parsed.getTime()).toBe(Date.UTC(2025, 9, 23, 4)) // October: EDT
-    expect(calendarDateInContentZone(parsed)).toBe('2025-10-23')
-  })
-
-  it('rejects invalid Date instances', () => {
-    expect(() => parseFrontmatterDate(new Date('nonsense'))).toThrow(/Invalid Date/)
-  })
-
-  it('rejects Date instances with a time component (YAML timestamps)', () => {
-    // `createdAt: 2024-01-05 23:00:00-05:00` in YAML yields 2024-01-06T04:00Z —
-    // silently truncating to a calendar date would shift the authored day.
-    const timestamp = new Date(Date.UTC(2024, 0, 6, 4))
-    expect(() => parseFrontmatterDate(timestamp)).toThrow(/Got a timestamp/)
-  })
-
   it.each([
     '2024/06/15',
     '15-06-2024',
     '2024-6-5',
     '2024-06-15T10:00:00Z',
+    // a YAML timestamp: truncating it to a calendar date could shift the day
+    '2024-01-05 23:00:00-05:00',
     'June 15, 2024',
     '',
   ])('rejects malformed string %j', (value) => {
@@ -121,7 +103,11 @@ describe('parseFrontmatterDate', () => {
     [null, /Missing value/],
     [42, /Unsupported type 'number'/],
     [true, /Unsupported type 'boolean'/],
-  ])('rejects non-string non-Date value %j', (value, message) => {
+    [
+      new Date(Date.UTC(2025, 9, 23)),
+      /Unsupported type 'object'/,
+    ],
+  ])('rejects non-string value %j', (value, message) => {
     expect(() => parseFrontmatterDate(value)).toThrow(message)
   })
 })

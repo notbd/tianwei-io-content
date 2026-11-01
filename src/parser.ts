@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import slugify from '@sindresorhus/slugify'
 import matter from 'gray-matter'
+import yaml from 'js-yaml'
 import { CONTENT_ROOT, CONTENT_TIME_ZONE } from './config.ts'
 
 const DATE_ONLY_RE = /^(\d{4})-(\d{2})-(\d{2})$/
@@ -49,11 +50,9 @@ export function zonedMidnight(year: number, month: number, day: number, timeZone
  * CONTENT_TIME_ZONE — i.e. `createdAt: 2025-10-23` means "October 23
  * where the author lives", stored as an unambiguous instant.
  *
- * Accepts:
- * - 'yyyy-MM-dd' strings
- * - Date instances (js-yaml parses unquoted `2024-01-05` as a UTC-midnight
- *   Date; only its calendar date is meaningful, so it is re-anchored to
- *   the content time zone like the string form)
+ * Accepts only 'yyyy-MM-dd' strings: parseMdxFile loads frontmatter
+ * without YAML's timestamp type, so unquoted dates arrive as the text the
+ * author wrote.
  *
  * Deterministic regardless of machine timezone. Throws on anything else,
  * including calendar-impossible dates such as 2024-02-30.
@@ -61,44 +60,25 @@ export function zonedMidnight(year: number, month: number, day: number, timeZone
 export function parseFrontmatterDate(value: unknown): Date {
   if (value === undefined || value === null)
     throw new Error(`[parser/date] Missing value: expected 'yyyy-MM-dd'`)
+  if (typeof value !== 'string')
+    throw new TypeError(`[parser/date] Unsupported type '${typeof value}': expected a 'yyyy-MM-dd' string`)
 
-  let year: number, month: number, day: number
+  const match = DATE_ONLY_RE.exec(value.trim())
+  if (!match)
+    throw new Error(`[parser/date] Invalid date format for '${value}': expected 'yyyy-MM-dd'`)
 
-  if (value instanceof Date) {
-    if (Number.isNaN(value.getTime()))
-      throw new TypeError(`[parser/date] Invalid Date instance`)
-    // js-yaml only yields a non-midnight Date when the frontmatter had a
-    // time/zone component (e.g. `2024-01-05 23:00:00-05:00`) — silently
-    // truncating that to a calendar date could shift it by a day.
-    if (value.getUTCHours() !== 0 || value.getUTCMinutes() !== 0
-      || value.getUTCSeconds() !== 0 || value.getUTCMilliseconds() !== 0) {
-      throw new Error(`[parser/date] Got a timestamp (${value.toISOString()}); expected a date-only 'yyyy-MM-dd'`)
-    }
-    year = value.getUTCFullYear()
-    month = value.getUTCMonth() + 1
-    day = value.getUTCDate()
-  }
-  else if (typeof value === 'string') {
-    const match = DATE_ONLY_RE.exec(value.trim())
-    if (!match)
-      throw new Error(`[parser/date] Invalid date format for '${value}': expected 'yyyy-MM-dd'`)
+  const year = Number(match[1])
+  const month = Number(match[2])
+  const day = Number(match[3])
 
-    year = Number(match[1])
-    month = Number(match[2])
-    day = Number(match[3])
-
-    // Round-trip check rejects impossible dates (e.g. 2024-02-30 rolls over to March)
-    const probe = new Date(Date.UTC(year, month - 1, day))
-    const roundTrips
-      = probe.getUTCFullYear() === year
-        && probe.getUTCMonth() === month - 1
-        && probe.getUTCDate() === day
-    if (!roundTrips)
-      throw new Error(`[parser/date] Impossible calendar date '${value}'`)
-  }
-  else {
-    throw new TypeError(`[parser/date] Unsupported type '${typeof value}': expected string or Date`)
-  }
+  // Round-trip check rejects impossible dates (e.g. 2024-02-30 rolls over to March)
+  const probe = new Date(Date.UTC(year, month - 1, day))
+  const roundTrips
+    = probe.getUTCFullYear() === year
+      && probe.getUTCMonth() === month - 1
+      && probe.getUTCDate() === day
+  if (!roundTrips)
+    throw new Error(`[parser/date] Impossible calendar date '${value}'`)
 
   return zonedMidnight(year, month, day, CONTENT_TIME_ZONE)
 }
@@ -159,6 +139,19 @@ export function validateMdxFileStructure(
 }
 
 /**
+ * gray-matter's default YAML schema turns an unquoted `2024-02-30` into a
+ * Date that has already rolled over to March 1, before any validation can
+ * see what the author wrote. CORE_SCHEMA has no timestamp type (and no JS
+ * types, so load() is safe), which leaves dates as the authored strings
+ * for parseFrontmatterDate to check.
+ */
+const FRONTMATTER_OPTIONS = {
+  engines: {
+    yaml: (input: string): object => yaml.load(input, { schema: yaml.CORE_SCHEMA }),
+  },
+}
+
+/**
  * Parse a single MDX file into a ContentRecord.
  * Throws with an aggregated message listing every invalid frontmatter field.
  */
@@ -180,7 +173,7 @@ export function parseMdxFile(
   let data: ReturnType<typeof matter>['data']
   let content: string
   try {
-    ({ data, content } = matter(raw))
+    ({ data, content } = matter(raw, FRONTMATTER_OPTIONS))
   }
   catch (err) {
     // js-yaml errors carry a line number but no file — add the path

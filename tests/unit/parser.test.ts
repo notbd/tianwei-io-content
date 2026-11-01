@@ -39,10 +39,10 @@ describe('parseMdxFile', () => {
     })
   })
 
-  it('parses unquoted YAML dates (js-yaml Date instances) to content-zone midnight', () => {
-    // Unquoted `createdAt: 2025-10-23` is parsed by js-yaml as a UTC Date —
-    // this is the format the real content files use. The parser re-anchors
-    // the calendar date to the content time zone.
+  it('parses unquoted YAML dates to content-zone midnight', () => {
+    // Unquoted `createdAt: 2025-10-23` is the format the real content files
+    // use; it reaches the date parser as the authored text, not as a
+    // js-yaml Date.
     root = makeContentDir({
       'articles/a.mdx': mdxDoc({ createdAt: '2025-10-23' }),
     })
@@ -86,6 +86,14 @@ describe('parseMdxFile', () => {
     })
     expect(() => parseMdxFile(path.join(root, 'articles/a.mdx'), root))
       .toThrow(/updatedAt:.*Invalid date format/)
+  })
+
+  it('rejects a YAML timestamp instead of truncating it to a date', () => {
+    root = makeContentDir({
+      'articles/a.mdx': mdxDoc({ createdAt: '2024-01-05 23:00:00-05:00' }),
+    })
+    expect(() => parseMdxFile(path.join(root, 'articles/a.mdx'), root))
+      .toThrow(/createdAt:.*Invalid date format/)
   })
 
   it('rejects a missing title', () => {
@@ -175,8 +183,7 @@ describe('parseAllPosts', () => {
     root = makeContentDir({
       'articles/good.mdx': mdxDoc(),
       'articles/bad-one.mdx': mdxDoc({ title: undefined }),
-      // quoted so YAML keeps it a string and our impossible-date check fires
-      'articles/bad-two.mdx': mdxDoc({ createdAt: '\'2024-02-30\'' }),
+      'articles/bad-two.mdx': mdxDoc({ createdAt: '2024-02-30' }),
     })
     const run = () => parseAllPosts(root)
     expect(run).toThrow(/2 file\(s\) failed to parse/)
@@ -184,16 +191,14 @@ describe('parseAllPosts', () => {
     expect(run).toThrow(/bad-two/)
   })
 
-  it('documents YAML rollover: unquoted impossible dates become valid Dates upstream', () => {
-    // js-yaml parses unquoted `2024-02-30` with Date semantics, rolling it
-    // over to March 1 BEFORE our validation can see the original text.
-    // Nothing to catch here — the parsed value is a legitimate midnight-UTC
-    // Date. Quote the frontmatter value to get strict validation.
+  it('rejects unquoted impossible dates instead of letting YAML roll them over', () => {
+    // js-yaml's timestamp type would turn `2024-02-30` into March 1 before
+    // validation; frontmatter is loaded without it, so the authored text
+    // reaches the calendar check and the sync aborts.
     root = makeContentDir({
       'articles/rollover.mdx': mdxDoc({ createdAt: '2024-02-30' }),
     })
-    const [record] = parseAllPosts(root)
-    expect(record!.createdAt.getTime()).toBe(Date.UTC(2024, 2, 1, 5))
+    expect(() => parseAllPosts(root)).toThrow(/createdAt:.*Impossible calendar date '2024-02-30'/)
   })
 
   it('rejects duplicate slugs across categories', () => {
