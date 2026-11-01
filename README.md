@@ -12,7 +12,7 @@ The content engine of my personal website [tianwei.io](https://tianwei.io).
 - **Runtime**: [Node.js](https://nodejs.org) + [TypeScript](https://www.typescriptlang.org)
 - **ORM**: [Drizzle ORM](https://orm.drizzle.team)
 - **Database**: [PostgreSQL](https://www.postgresql.org)
-- **Remote DB Host**: [Neon](https://neon.tech)
+- **Remote DB Host**: [Neon](https://neon.com)
 - **Content Format**: [MDX](https://mdxjs.com) files with frontmatter
 - **Testing**: [Vitest](https://vitest.dev) + [PGlite](https://pglite.dev) (in-memory Postgres)
 - **Infrastructure**: [Docker](https://www.docker.com) Compose (local Postgres), [GitHub Actions](https://docs.github.com/en/actions) (CI + remote sync)
@@ -37,7 +37,7 @@ The content engine of my personal website [tianwei.io](https://tianwei.io).
 | Path | Purpose |
 | --- | --- |
 | `content/{category}/{slug}.mdx` | The content itself; folder name → category, filename → slug |
-| `src/` | Library code: frontmatter parsing, transactional sync, file watcher |
+| `src/` | Library code: parsing and validation, transactional sync, file watcher, the deploy's calls to the frontend |
 | `drizzle/` | Database schema + committed migration history (`migrations/`) |
 | `scripts/` | Thin CLI entry points (local dev, prod sync, frontend revalidation) |
 | `tests/` | Vitest suite — unit (parser, dates, path structure) + integration (migration chain, sync, watcher; all against PGlite) |
@@ -46,7 +46,7 @@ The content engine of my personal website [tianwei.io](https://tianwei.io).
 
 A sync is a single **transactional reconcile** (`src/sync.ts`):
 
-- Every `.mdx` file is parsed and validated first — any invalid file aborts the run before the database is touched.
+- Every `.mdx` file is parsed and validated first — any invalid file aborts the run before the database is touched. Frontmatter follows a strict schema (an unknown key such as a typo'd `updateAt` is an error, not silently dropped; titles and descriptions may not contain control characters, which would break the RSS feed), and the MDX body must compile with the parser the frontend uses and contain no JavaScript (imports, exports, `{expressions}`, expression props), which the frontend refuses to run. Errors name the file and line.
 - Inside one transaction: all parsed posts are upserted (keyed on slug, so ids stay stable) and rows whose files no longer exist are deleted.
 - Readers never observe an empty or partially-synced table; renames can't leave orphaned rows.
 - Concurrent syncs (e.g. a manual `sync:prod` during a deploy) are serialized by a transaction-scoped Postgres advisory lock, so they never interleave.
@@ -86,7 +86,7 @@ After `pnpm dev:up`:
 | `pnpm content:sync` | One-shot local reconcile (no watcher) |
 | `pnpm sync:prod` | Production reconcile (requires `DATABASE_URL`) |
 | `pnpm db:generate` / `db:migrate` | Generate a migration from schema changes / apply pending migrations |
-| `pnpm frontend:revalidate` | Ask the frontend to revalidate its content cache |
+| `pnpm frontend:revalidate` | Revalidate the frontend's content cache (twice, a minute apart), then check that every page renders |
 | `pnpm lint` / `typecheck` / `test` | Quality gates (same as CI) |
 
 <h2>Env Configuration</h2>
@@ -98,7 +98,8 @@ See `.env.example` for the full annotated list. Locally, `LOCAL_*` variables dri
 Production sync is fully automated:
 
 - CI (`.github/workflows/ci.yml`) runs lint, typecheck and tests on every pull request.
-- On every push to `main` touching content or sync code, `.github/workflows/deploy-content.yml` re-runs the checks, applies pending migrations (`drizzle-kit migrate` — the committed history under `drizzle/migrations/`), performs the transactional reconcile against Neon, and revalidates the frontend cache. Deploys are serialized via a concurrency group.
+- CI also parses every committed post (`tests/unit/committed-content.test.ts`), so an invalid one fails its pull request instead of the production deploy.
+- On every push to `main` touching content or sync code, `.github/workflows/deploy-content.yml` re-runs the checks, refuses any commit that is not the head of `main` (re-running an old deploy would roll the content back; revert instead), applies pending migrations (`drizzle-kit migrate` — the committed history under `drizzle/migrations/`), performs the transactional reconcile against Neon, and runs `pnpm frontend:revalidate`: it revalidates the frontend cache, revalidates again a minute later (for any render that read the old rows mid-sync), and requests every page in the sitemap, failing unless each answers 200. Deploys are serialized via a concurrency group.
 
 Result: the **remote database is always in sync** with the MDX content stored in the `main` branch of this repo.
 
