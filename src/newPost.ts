@@ -16,6 +16,9 @@ export function newPostFile(title: string, author: string, today: string): { slu
   const slug = slugify(title)
   if (slug === '')
     throw new Error(`[new-post] "${title}" has no letters or digits to build a slug from`)
+  // the slug column is varchar(200), which the parser enforces too
+  if (slug.length > 200)
+    throw new Error(`[new-post] "${title}" makes a ${slug.length}-character slug (max 200); shorten the title`)
 
   const text = [
     '---',

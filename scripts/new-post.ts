@@ -18,6 +18,11 @@ if (title === undefined || title.trim() === '') {
   console.error('Usage: pnpm new-post "Post title" [category]')
   process.exit(2)
 }
+// a category is one folder name under content/
+if (category !== path.basename(category) || category.startsWith('.')) {
+  console.error(`[new-post] category "${category}" must be a folder name, not a path`)
+  process.exit(2)
+}
 
 const newest = parseAllPosts().toSorted((a, b) => b.createdAt.getTime() - a.createdAt.getTime())[0]
 const { slug, text } = newPostFile(title.trim(), newest?.author ?? '', todayInContentTimeZone())
@@ -30,5 +35,12 @@ if (fs.existsSync(filePath)) {
 
 fs.mkdirSync(path.dirname(filePath), { recursive: true })
 fs.writeFileSync(filePath, text, { flag: 'wx' })
-parseMdxFile(filePath)
+try {
+  parseMdxFile(filePath)
+}
+catch (err) {
+  // never leave a file behind that would fail the next sync and CI
+  fs.rmSync(filePath)
+  throw err
+}
 console.info(`[new-post] Created ${path.relative(process.cwd(), filePath)} (unpublished). Set isPublished: true when it is ready.`)

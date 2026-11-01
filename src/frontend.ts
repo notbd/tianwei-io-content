@@ -50,7 +50,9 @@ export async function revalidateFrontend(frontendUrl: URL, secret: string): Prom
  * Requests every page the sitemap lists and fails unless each answers 200.
  * Right after a revalidation this renders each page with the new content,
  * so a post the frontend cannot render (an MDX component it does not have,
- * a prop it rejects) fails the deploy instead of the next visitor.
+ * a prop it rejects) turns the deploy red at once. Visitors see the error
+ * too until it is fixed (the synced content has no older version to fall
+ * back on); the check makes sure the author hears of it first.
  */
 export async function checkEveryPage(frontendUrl: URL): Promise<string[]> {
   const sitemap = await fetch(new URL('/sitemap.xml', frontendUrl), {

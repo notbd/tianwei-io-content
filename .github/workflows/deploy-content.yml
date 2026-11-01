@@ -64,14 +64,16 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       # The sync makes production match this checkout, so re-running an older
-      # run from the Actions UI would roll the content back to that commit
-      # (a re-run keeps its original GITHUB_SHA). Roll back with a revert
-      # instead; this stops anything but the head of main.
-      - name: Refuse to deploy anything but the head of main
+      # run from the Actions UI would roll the content back to that commit (a
+      # re-run keeps its original GITHUB_SHA). Stop unless the files this
+      # deploy uses (the push trigger's paths) match the head of main; a later
+      # commit that changed only docs or tests does not block this one. Roll
+      # back with a revert instead.
+      - name: Refuse files that differ from the head of main
         run: |
           git fetch --depth=1 origin main
-          if [ "$(git rev-parse FETCH_HEAD)" != "$GITHUB_SHA" ]; then
-            echo "::error::$GITHUB_SHA is not the head of main; re-run the latest deploy, or revert the change instead"
+          if ! git diff --quiet "$GITHUB_SHA" FETCH_HEAD -- content drizzle src scripts drizzle.config.ts .github/workflows/deploy-content.yml package.json pnpm-lock.yaml; then
+            echo "::error::main has changed the deployed files since $GITHUB_SHA; run the workflow from the head of main (Actions > Run workflow), or revert instead"
             exit 1
           fi
 

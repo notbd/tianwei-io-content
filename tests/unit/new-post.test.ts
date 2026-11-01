@@ -39,7 +39,8 @@ describe('newPostFile', () => {
     expect(record.createdAt.toISOString()).toBe('2026-11-01T04:00:00.000Z')
   })
 
-  it('refuses a title with nothing to build a slug from', () => {
+  it('refuses a title with nothing to build a slug from, or one too long for the slug column', () => {
     expect(() => newPostFile('???', 'A', '2026-11-01')).toThrow(/no letters or digits/)
+    expect(() => newPostFile('word '.repeat(45), 'A', '2026-11-01')).toThrow(/224-character slug \(max 200\)/)
   })
 })

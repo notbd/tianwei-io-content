@@ -8,7 +8,8 @@
  *    the first expiry, where it would stay until the next sync. Frontend
  *    renders give up after about 30 s (its fetcher's deadlines), so by now
  *    any such write has landed, and this expiry removes it.
- * 3. Request every page in the sitemap; anything but a 200 fails the deploy.
+ * 3. Request every page in the sitemap; anything but a 200 fails the deploy,
+ *    so a page that does not render is reported at once.
  */
 import process from 'node:process'
 import { setTimeout as sleep } from 'node:timers/promises'
