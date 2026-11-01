@@ -6,13 +6,13 @@ author: Tianwei Zhang
 isPublished: true
 ---
 
-Fetching and processing data from APIs plays a core part of what ikalendar2 does. Over the course of the project, I have gone through several iterations of handling asynchronous data in the app. This was driven both by my growing understanding of the frameworks and by Swift's own evolution in its concurrency tooling.
+Fetching and processing data from APIs is a core part of what ikalendar2 does. Over the course of the project, I have gone through several iterations of handling asynchronous data in the app. This was driven both by my growing understanding of the frameworks and by Swift's own evolution in its concurrency tooling.
 
-1. #### Completion Handlers
+## Completion Handlers
 
 ikalendar2 started out using completion handlers to manage asynchronous data fetching and processing. This common Swift practice relies on callers passing **callback functions** to handle the output once a data task completes.
 
-Below is one example of how completion handlers were used in the NetworkManager class to fetch data, decode, and pass it back to the caller.
+Below is one example of how completion handlers were used in the `IkaNetworkManager` class to fetch data, decode it, and pass it back to the caller.
 
 ```swift title="IkaNetworkManager.swift" /completion/
 final class IkaNetworkManager {
@@ -63,15 +63,15 @@ final class IkaNetworkManager {
 
 The code should be self-explanatory. Note we use `@escaping` to ensure both the completion handler and the decoder function get their lifetime retained until after the asynchronous task finishes. And we use a convenience enum `Result` to encapsulate the success / failure status of the data task, since the same completion handler is used for both success and failure cases and we need a way to signal the caller about what to expect.
 
-Completion Handlers are a straightforward approach suitable for simple data tasks. However, they struggle to keep up as the data layer of the app grows in complexity. For example, it can lead to deeply nested callback functions and poor readability when chaining multiple asynchronous tasks together; also, the independence between each callback closure means that it's impossible to share states between them. Even though I did manage to make it work when starting out, I was actively seeking better solutions as the functionality of the app expanded.
+Completion handlers are a straightforward approach suitable for simple data tasks. However, they struggle to keep up as the data layer of the app grows in complexity. For example, it can lead to deeply nested callback functions and poor readability when chaining multiple asynchronous tasks together; also, the independence between each callback closure means that it's impossible to share state between them. Even though I did manage to make it work when starting out, I was actively seeking better solutions as the functionality of the app expanded.
 
-2. #### Combine
+## Combine
 
 As I delved deeper into SwiftUI fundamentals, I learned about the [Combine](https://developer.apple.com/documentation/combine) framework, which was introduced alongside SwiftUI as a structured way to handle events and data streams. It's built on top of a publisher-subscriber pattern and is the backbone that powers SwiftUI's reactive data flow and state management.
 
 I started exploring the possibilities of using Combine to manage the flow of asynchronous data tasks in ikalendar2.
 
-Now, for the previous example, in place of `IkaNetworkManager` class which returns data directly, we have a new class `IkaPublisherManager` that creates **publishers** emitting data and errors from the network calls. The caller can later subscribe to the publishers to receive the results.
+Now, for the previous example, in place of the `IkaNetworkManager` class, which returns data directly, we have a new class `IkaPublisherManager` that creates **publishers** emitting data and errors from the network calls. The caller can later subscribe to the publishers to receive the results.
 
 ```swift title="IkaPublisherManager.swift"
 final class IkaPublisherManager {
@@ -150,13 +150,13 @@ final class IkaCatalog: ObservableObject {
       .receive(on: DispatchQueue.main)
       .sink { completionStatus in
         switch completionStatus {
-          case .failure(let ikaError):
-            self.markAsError(error: ikaError)
-          case .finished:
-            // clean-up
-            self.markAsLoaded()
-            self.cancelAutoLoadingStatus()
-            self.dataTaskCancellables.removeAll()
+        case .failure(let ikaError):
+          self.markAsError(error: ikaError)
+        case .finished:
+          // clean-up
+          self.markAsLoaded()
+          self.cancelAutoLoadingStatus()
+          self.dataTaskCancellables.removeAll()
         }
       } receiveValue: { battleRotationDict, salmonRotations, salmonRewardApparelInfo in
         // update the data model
@@ -173,7 +173,7 @@ final class IkaCatalog: ObservableObject {
 
 It is quite obvious that this pattern shares similarities with JavaScript **promises** in that the return value is abstracted behind a Publisher/Promise object, and will be resolved at some point in the future with an explicit success or failure status. 
 
-Compared to the completion handler approach, Combine offers a more declarative, readable way to perform asynchronous operations. However, it retains some of the issues which limit its scalability: for example, we resorted to a special `Publishers.Zip3` initializer to zip three data publishers together and wait for all to be resolved, but this solution being baked-in clearly shows parallelization is not going to scale well.
+Compared to the completion handler approach, Combine offers a more declarative, readable way to perform asynchronous operations. However, it retains some of the issues which limit its scalability: for example, we resorted to a special `Publishers.Zip3` initializer to zip three data publishers together and wait for all to be resolved, but the fact that this solution is baked in clearly shows that parallelization is not going to scale well.
 
 <MdxImage
   src="ikalendar2-dev-notes/combine-example"
@@ -183,11 +183,11 @@ Compared to the completion handler approach, Combine offers a more declarative, 
   title="Limited Publisher-Combination Options in Combine"
 />
 
-Furthermore, the design of Combine primarily targets persistent subscriptions and continuous data streams. Its tooling and paradigm are a bit overkill for our use case of one-at-a-time data fetching. Using Combine gradually became a burden because the proprietary mechanism had a deep learning curve and kept slowing development down. But unfortunately, other than Combine and completion handlers, there were no alternatives available in Swift at the time.
+Furthermore, the design of Combine primarily targets persistent subscriptions and continuous data streams. Its tooling and paradigm are a bit overkill for our use case of one-at-a-time data fetching. Using Combine gradually became a burden because the proprietary mechanism had a steep learning curve and kept slowing development down. But unfortunately, other than Combine and completion handlers, there were no alternatives available in Swift at the time.
 
-3. #### Async/Await
+## Async/Await
 
-That changed when Apple finally introduced the support for async/await and structured concurrency in Swift 5.5 (released alongside iOS 15 in 2021). This long-awaited addition finally brought Swift in line with other modern languages, allowing the asynchronous code to be structured in a much nicer way with good readability. I was honestly surprised it took this long, but I knew I had to jump on board immediately.
+That changed when Apple finally introduced support for async/await and structured concurrency in Swift 5.5 (released alongside iOS 15 in 2021). This long-awaited addition finally brought Swift in line with other modern languages, allowing asynchronous code to be structured in a much nicer way with good readability. I was honestly surprised it took this long, but I knew I had to jump on board immediately.
 
 Revisiting our example, we go back to the `IkaNetworkManager` class since we don't need publishers anymore, then drop the completion handlers and instead mark the function as `async throws`. The function can now return the data directly, or throw an error that gets propagated to the caller, all without the need for a callback closure.
 
@@ -278,15 +278,15 @@ final class IkaCatalog {
 }
 ```
 
-Just look at how much cleaner it becomes. No more callbacks, no more `Publisher.Zip3`, everything is structured like synchronous code. We use `async let` to initiate the asynchronous tasks in parallel, and `await` them to all finish before using the results to update the data model.
+Just look at how much cleaner it becomes. No more callbacks, no more `Publishers.Zip3`, everything is structured like synchronous code. We use `async let` to initiate the asynchronous tasks in parallel, and `await` them all to finish before using the results to update the data model.
 
-Note that we also adopt the new `@MainActor` property wrapper to ensure all class methods and the updates of all class properties (which are directly referenced by the UI) are going to be performed on the main thread, while not affecting the tasks initiated explicitly under the async context.
+Note that we also adopt the new `@MainActor` attribute to ensure all class methods and the updates of all class properties (which are directly referenced by the UI) are going to be performed on the main thread, while not affecting the tasks initiated explicitly under the async context.
 
 The biggest benefit async/await brings us here is the readability and maintainability. The code is easy to write, easy to follow, and easy to scale, because it is written just like synchronous code. Error handling is also much cleaner, as we are able to throw and catch errors like we normally do.
 
 ## Summary
 
-It may seem like excessive to go out of the way and implement all these completely different approaches to asynchronous data handling (plus actually deploy them in production), and it kind of is, but I'm glad I did and I'm having fun with it. ikalendar2 is not just a tool I built, it's also my learning and playing ground. I would not have gotten here if I weren't questioning my own implementations in the first place and keeping building things.
+It may seem excessive to go out of my way and implement all these completely different approaches to asynchronous data handling (plus actually deploy them in production), and it kind of is, but I'm glad I did and I'm having fun with it. ikalendar2 is not just a tool I built; it's also my learning ground and playground. I would not have gotten here if I hadn't questioned my own implementations in the first place and kept building things.
 
-As for the future development of ikalendar2, the introduction of async/await and Concurrency APIs has been a huge positive and is what I plan to stick with. It's much more **readable**, **maintainable**, and **scalable** than the previous approaches. Since Xcode 13.2 (released a few months after Swift 5.5's introduction), these concurrency features have even gained backward compatibility to earlier OS versions. There's really no reason for existing projects not to switch over, and I believe this is the best way to handle asynchronous code in Swift for all my projects going forward.
+As for the future development of ikalendar2, the introduction of async/await and concurrency APIs has been a huge positive and is what I plan to stick with. It's much more **readable**, **maintainable**, and **scalable** than the previous approaches. Since Xcode 13.2 (released a few months after Swift 5.5's introduction), these concurrency features have even gained backward compatibility with earlier OS versions. There's really no reason for existing projects not to switch over, and I believe this is the best way to handle asynchronous code in Swift for all my projects going forward.
 
