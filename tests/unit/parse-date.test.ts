@@ -1,7 +1,7 @@
 import process from 'node:process'
 import { afterEach, describe, expect, it } from 'vitest'
 import { CONTENT_TIME_ZONE } from '../../src/config.ts'
-import { parseFrontmatterDate, zonedMidnight } from '../../src/parser.ts'
+import { parseFrontmatterDate, zonedMidnight } from '../../src/date.ts'
 
 const ORIGINAL_TZ = process.env.TZ
 
