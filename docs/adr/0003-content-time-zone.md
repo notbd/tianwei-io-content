@@ -22,6 +22,12 @@ One explicit model, one constant per side:
 
 - **Authoring semantics**: `createdAt: 2025-10-23` means "October 23 in
   `CONTENT_TIME_ZONE`" (`America/New_York`, defined in `src/config.ts`).
+  The value must be the string `yyyy-MM-dd` (quoted or not). Frontmatter
+  YAML is loaded with js-yaml's `CORE_SCHEMA`, which has no timestamp
+  type, so the parser sees the authored text and rejects impossible dates
+  such as `2024-02-30` instead of letting YAML roll them over to March 1
+  (`FRONTMATTER_OPTIONS` in `src/parser.ts`, `parseFrontmatterDate` in
+  `src/date.ts`).
 - **Storage**: the UTC **instant** of that zone's midnight (e.g.
   `2025-10-23T04:00:00Z` in EDT, `05:00Z` in EST), computed with a
   dependency-free Intl-based zone-offset conversion (two-pass, handles
