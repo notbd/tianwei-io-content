@@ -19,7 +19,7 @@ export function createDb() {
 
   if (remoteUrl === undefined && process.env.LOCAL_POSTGRES_USER === undefined) {
     throw new Error(
-      '[db] Neither DATABASE_URL nor LOCAL_POSTGRES_* is set — '
+      '[db] Neither DATABASE_URL nor LOCAL_POSTGRES_* is set: '
       + 'copy .env.example to .env.local for local development.',
     )
   }

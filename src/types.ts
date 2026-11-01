@@ -1,35 +1,12 @@
+import type { posts } from '../drizzle/schema.ts'
+
 /**
- * Represents the unified content record used across the
- * parsing, synchronization, and database layers.
+ * One parsed content file: exactly a `posts` row minus the serial id, so
+ * the parser's output is what the sync writes, column for column.
+ * Dates are midnight in CONTENT_TIME_ZONE stored as UTC instants (ADR-0003);
+ * an absent optional field is null, as in the table.
  */
-export interface ContentRecord {
-  /** Unique slug (derived from filename) */
-  slug: string
-
-  /** The content category (derived from subfolder name) */
-  category: string
-
-  /** The visible title of the post */
-  title: string
-
-  /** Optional summary or meta description */
-  description?: string
-
-  /** Author name */
-  author: string
-
-  /** Publication date: midnight in CONTENT_TIME_ZONE, stored as a UTC instant (ADR-0003) */
-  createdAt: Date
-
-  /** Optional last-updated date: same encoding as createdAt, never before it */
-  updatedAt?: Date
-
-  /** Whether this record is visible on the frontend */
-  isPublished: boolean
-
-  /** Raw Markdown/MDX string content */
-  content: string
-}
+export type ContentRecord = Omit<typeof posts.$inferSelect, 'id'>
 
 /** Result of a structure validation on a content file path. */
 export type StructureResult

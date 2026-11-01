@@ -41,7 +41,7 @@ export function zonedMidnight(year: number, month: number, day: number, timeZone
 
 /**
  * Parse a frontmatter date value into the UTC instant of midnight in
- * CONTENT_TIME_ZONE — i.e. `createdAt: 2025-10-23` means "October 23
+ * CONTENT_TIME_ZONE, i.e. `createdAt: 2025-10-23` means "October 23
  * where the author lives", stored as an unambiguous instant.
  *
  * Accepts only 'yyyy-MM-dd' strings: parseMdxFile loads frontmatter

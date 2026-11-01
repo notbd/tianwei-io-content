@@ -33,6 +33,7 @@ describe('parseMdxFile', () => {
       author: 'Tianwei Zhang',
       // midnight in the content time zone (EDT in October)
       createdAt: new Date(Date.UTC(2025, 9, 23, 4)),
+      updatedAt: null,
       isPublished: true,
       // gray-matter preserves one leading newline after the frontmatter block
       content: '\n# Heading\n\nBody text.\n',
@@ -55,14 +56,14 @@ describe('parseMdxFile', () => {
       'articles/a.mdx': mdxDoc({ description: undefined }),
     })
     const record = parseMdxFile(path.join(root, 'articles/a.mdx'), root)
-    expect(record.description).toBeUndefined()
+    expect(record.description).toBeNull()
   })
 
   it('treats updatedAt as optional and anchors it to content-zone midnight', () => {
     root = makeContentDir({
       'articles/a.mdx': mdxDoc(),
     })
-    expect(parseMdxFile(path.join(root, 'articles/a.mdx'), root).updatedAt).toBeUndefined()
+    expect(parseMdxFile(path.join(root, 'articles/a.mdx'), root).updatedAt).toBeNull()
 
     fs.writeFileSync(
       path.join(root, 'articles/a.mdx'),
@@ -96,6 +97,24 @@ describe('parseMdxFile', () => {
       .toThrow(/createdAt:.*Invalid date format/)
   })
 
+  it('rejects control characters in the title and description (they would break the RSS feed)', () => {
+    root = makeContentDir({
+      // YAML escapes: js-yaml already refuses raw control characters in the file
+      'articles/a.mdx': mdxDoc({ title: '"Tab\\tis fine, vertical tab\\v is not"', description: '"Form\\ffeed"' }),
+    })
+    const run = () => parseMdxFile(path.join(root, 'articles/a.mdx'), root)
+    expect(run).toThrow(/title: contains a control character/)
+    expect(run).toThrow(/description: contains a control character/)
+  })
+
+  it('rejects an unknown key instead of silently dropping it', () => {
+    root = makeContentDir({
+      'articles/a.mdx': mdxDoc().replace('isPublished', 'updateAt: 2024-07-01\nisPublished'),
+    })
+    expect(() => parseMdxFile(path.join(root, 'articles/a.mdx'), root))
+      .toThrow(/frontmatter: Unrecognized key: "updateAt"/)
+  })
+
   it('rejects a missing title', () => {
     root = makeContentDir({
       'articles/a.mdx': mdxDoc({ title: undefined }),
@@ -126,6 +145,36 @@ describe('parseMdxFile', () => {
     expect(run).toThrow(/author/)
     expect(run).toThrow(/createdAt/)
     expect(run).toThrow(/isPublished/)
+  })
+
+  it('rejects an MDX body the frontend cannot compile, naming the file line', () => {
+    // mdxDoc's frontmatter takes lines 1-8, so the body starts at line 9
+    root = makeContentDir({
+      'articles/a.mdx': mdxDoc({ body: 'Fine.\n\nAn <b>unclosed tag.\n' }),
+    })
+    expect(() => parseMdxFile(path.join(root, 'articles/a.mdx'), root))
+      .toThrow(/body: MDX syntax error at line 11: Expected a closing tag for `<b>` before the end of `paragraph`/)
+  })
+
+  it.each([
+    ['an import', 'import x from \'y\'\n\nText.\n', 'mdxjsEsm'],
+    ['an inline expression', 'Two is {1 + 1}.\n', 'mdxTextExpression'],
+    ['a flow expression', '{1 + 1}\n', 'mdxFlowExpression'],
+    ['an expression prop', '<MdxImage src="a" width={480} />\n', 'an expression or spread prop'],
+    ['a spread prop', '<MdxImage {...props} />\n', 'an expression or spread prop'],
+  ])('rejects JavaScript in the body: %s', (_name, body, kind) => {
+    root = makeContentDir({
+      'articles/a.mdx': mdxDoc({ body }),
+    })
+    expect(() => parseMdxFile(path.join(root, 'articles/a.mdx'), root))
+      .toThrow(`body: JavaScript is not allowed in posts at line 9 (${kind})`)
+  })
+
+  it('accepts components with string props', () => {
+    root = makeContentDir({
+      'articles/a.mdx': mdxDoc({ body: '<MdxImage src="a/b" width="480" height="320" alt="An image" />\n' }),
+    })
+    expect(parseMdxFile(path.join(root, 'articles/a.mdx'), root).content).toContain('<MdxImage')
   })
 
   it('throws on structurally invalid paths', () => {

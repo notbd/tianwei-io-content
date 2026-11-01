@@ -1,7 +1,7 @@
 import type { PgDatabase, PgQueryResultHKT } from 'drizzle-orm/pg-core'
 import type * as schema from '../drizzle/schema.ts'
 import type { SyncResult } from './types.ts'
-import { inArray, sql } from 'drizzle-orm'
+import { getTableColumns, inArray, sql } from 'drizzle-orm'
 import { posts } from '../drizzle/schema.ts'
 import { CONTENT_ROOT } from './config.ts'
 import { parseAllPosts } from './parser.ts'
@@ -14,6 +14,17 @@ export type Db = PgDatabase<PgQueryResultHKT, typeof schema>
 
 /** Arbitrary but fixed pg_advisory_xact_lock key; every writer must use the same one. */
 const SYNC_LOCK_KEY = 726_100_001
+
+// On a slug conflict every other column takes the incoming value. Derived
+// from the table, so a new column can never be inserted but left stale on
+// update.
+const { id: _id, slug: _slug, ...updatableColumns } = getTableColumns(posts)
+const TAKE_INCOMING = Object.fromEntries(
+  Object.entries(updatableColumns).map(([key, column]) => [
+    key,
+    sql.raw(`excluded."${column.name}"`),
+  ]),
+)
 
 export interface SyncOptions {
   /** Directory to parse; defaults to the repo's /content */
@@ -29,14 +40,14 @@ export interface SyncOptions {
 /**
  * Reconcile the posts table with the content directory, atomically.
  *
- * 1. Parse everything first — any invalid file aborts before the
+ * 1. Parse everything first: any invalid file aborts before the
  *    database is touched (parseAllPosts throws an aggregated error).
  * 2. In a single transaction: upsert every parsed record (keyed on
  *    slug, so ids of unchanged posts are stable) and delete rows whose
  *    slug no longer exists on disk (handles file renames/removals).
  *
  * Readers under READ COMMITTED observe either the previous state or
- * the new state — never an empty or partially-synced table.
+ * the new state, never an empty or partially-synced table.
  *
  * Writers are serialized: the transaction first takes an advisory lock,
  * so a second sync (a manual `sync:prod` during a deploy, or the local
@@ -72,33 +83,10 @@ export async function syncPosts(db: Db, options: SyncOptions = {}): Promise<Sync
     // bind parameters per statement (9 params/row → hard ceiling ~7280 rows).
     const UPSERT_CHUNK_SIZE = 1000
     for (let offset = 0; offset < records.length; offset += UPSERT_CHUNK_SIZE) {
-      const chunk = records.slice(offset, offset + UPSERT_CHUNK_SIZE)
       await tx
         .insert(posts)
-        .values(chunk.map(record => ({
-          slug: record.slug,
-          category: record.category,
-          title: record.title,
-          description: record.description ?? null,
-          author: record.author,
-          createdAt: record.createdAt,
-          updatedAt: record.updatedAt ?? null,
-          isPublished: record.isPublished,
-          content: record.content,
-        })))
-        .onConflictDoUpdate({
-          target: posts.slug,
-          set: {
-            category: sql`excluded.category`,
-            title: sql`excluded.title`,
-            description: sql`excluded.description`,
-            author: sql`excluded.author`,
-            createdAt: sql`excluded.created_at`,
-            updatedAt: sql`excluded.updated_at`,
-            isPublished: sql`excluded.is_published`,
-            content: sql`excluded.content`,
-          },
-        })
+        .values(records.slice(offset, offset + UPSERT_CHUNK_SIZE))
+        .onConflictDoUpdate({ target: posts.slug, set: TAKE_INCOMING })
     }
 
     if (deletedSlugs.length > 0)

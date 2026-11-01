@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "private": true,
   "packageManager": "pnpm@10.34.9",
-  "description": "Content engine for tianwei.io — parses MDX content and syncs it to Postgres",
+  "description": "Content engine for tianwei.io: parses MDX content and syncs it to Postgres",
   "author": "Tianwei Zhang",
   "license": "AGPL-3.0-only",
   "engines": {
@@ -23,6 +23,7 @@
     "content:sync": "tsx scripts/local-dev.ts --no-watch",
     "sync:prod": "tsx scripts/sync-prod.ts",
     "frontend:revalidate": "tsx scripts/revalidate-frontend.ts",
+    "new-post": "tsx scripts/new-post.ts",
     "lint": "eslint",
     "lint:fix": "eslint --fix",
     "typecheck": "tsc --noEmit",
@@ -30,18 +31,21 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@mdx-js/mdx": "^3.1.1",
     "@sindresorhus/slugify": "^3.0.1",
     "chokidar": "^6.0.0",
     "dotenv": "^18.0.9",
     "drizzle-orm": "^0.45.4",
     "gray-matter": "^4.0.3",
     "js-yaml": "^3.15.2",
-    "pg": "^8.23.1"
+    "pg": "^8.23.1",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@antfu/eslint-config": "^10.0.0",
     "@electric-sql/pglite": "^0.5.14",
     "@types/js-yaml": "^3.12.10",
+    "@types/mdast": "^4.0.4",
     "@types/node": "^26.6.6",
     "@types/pg": "^8.23.1",
     "drizzle-kit": "^0.31.11",

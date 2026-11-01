@@ -25,7 +25,7 @@ export interface ContentWatcher {
  *
  * Design: a burst of file events (editor save storms, git checkout,
  * file renames) collapses into ONE debounced full reconcile, and the
- * running/pending latch guarantees reconciles never overlap — the
+ * running/pending latch guarantees reconciles never overlap; the
  * classic out-of-order-async-writes race of per-event handlers is
  * structurally impossible. A failed reconcile (e.g. invalid frontmatter
  * mid-edit) leaves the database untouched and the watcher alive.
@@ -93,7 +93,7 @@ export function watchContent(db: Db, options: WatchOptions = {}): ContentWatcher
   })
 
   // Events fired during chokidar's initial scan are swallowed by
-  // ignoreInitial — callers that mutate files right after starting the
+  // ignoreInitial; callers that mutate files right after starting the
   // watcher (tests, scripted flows) must await this first.
   const ready = new Promise<void>((resolve) => {
     watcher.on('ready', () => {

@@ -1,66 +1,40 @@
+/**
+ * The content deploy's last step: makes the frontend serve what was just
+ * synced, then proves every page renders.
+ *
+ * 1. Revalidate: the frontend expires its content cache and re-fetches it.
+ * 2. A minute later, revalidate again. A page that was rendering while the
+ *    sync committed may have read the old rows and stored its result after
+ *    the first expiry, where it would stay until the next sync. Frontend
+ *    renders give up after about 30 s (its fetcher's deadlines), so by now
+ *    any such write has landed, and this expiry removes it.
+ * 3. Request every page in the sitemap; anything but a 200 fails the deploy,
+ *    so a page that does not render is reported at once.
+ */
 import process from 'node:process'
+import { setTimeout as sleep } from 'node:timers/promises'
 import dotenv from 'dotenv'
+import { checkEveryPage, revalidateFrontend } from '../src/frontend.ts'
 
 dotenv.config({ path: '.env.local', quiet: true })
 
+const SECOND_PASS_DELAY_MS = 60_000
+
 function requireEnv(name: string): string {
   const value = process.env[name]
-  if (!value) {
+  if (!value)
     throw new Error(`[env] Missing required variable: ${name}`)
-  }
   return value
 }
 
-async function triggerRevalidation(frontend: URL, secret: string) {
-  const endpoint = new URL('/api/revalidate', frontend)
+const frontendUrl = new URL(requireEnv('FRONTEND_URL'))
+const secret = requireEnv('REVALIDATION_SECRET')
 
-  const response = await fetch(endpoint, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      'authorization': `Bearer ${secret}`,
-    },
-    body: JSON.stringify({
-      tags: ['posts'],
-    }),
-    // a hung frontend must fail the deploy step, not stall it for minutes
-    signal: AbortSignal.timeout(60_000),
-  })
+console.info('[revalidate] Success:', await revalidateFrontend(frontendUrl, secret))
 
-  const rawBody = await response.text()
+console.info(`[revalidate] Second pass in ${SECOND_PASS_DELAY_MS / 1000} s, after any render that read the old rows has stored its result`)
+await sleep(SECOND_PASS_DELAY_MS)
+console.info('[revalidate] Success:', await revalidateFrontend(frontendUrl, secret))
 
-  if (!response.ok) {
-    throw new Error(`[revalidate] Failed (${response.status}): ${rawBody}`)
-  }
-
-  let payload: { success?: boolean, error?: string }
-  try {
-    payload = JSON.parse(rawBody) as { success?: boolean, error?: string }
-  }
-  catch {
-    // e.g. a proxy/CDN HTML error page with a 2xx status
-    throw new Error(`[revalidate] Non-JSON response (${response.status}) from ${endpoint}: ${rawBody.slice(0, 300)}`)
-  }
-
-  // A 207 Multi-Status (revalidated but warming failed) counts as ok by
-  // response.ok — check the payload so a cold cache fails the deploy loudly.
-  if (payload.success !== true) {
-    throw new Error(`[revalidate] Partial failure (${response.status}): ${JSON.stringify(payload)}`)
-  }
-
-  console.info('[revalidate] Success:', payload)
-}
-
-async function main() {
-  const frontendUrl = requireEnv('FRONTEND_URL')
-  const secret = requireEnv('REVALIDATION_SECRET')
-
-  await triggerRevalidation(new URL(frontendUrl), secret)
-
-  console.info('[revalidate] Completed.')
-}
-
-main().catch((err) => {
-  console.error(err)
-  process.exitCode = 1
-})
+const pages = await checkEveryPage(frontendUrl)
+console.info(`[check] All ${pages.length} pages answered 200`)

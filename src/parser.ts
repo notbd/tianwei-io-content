@@ -1,9 +1,12 @@
+import type { Root } from 'mdast'
 import type { ContentRecord, StructureResult } from './types.ts'
 import fs from 'node:fs'
 import path from 'node:path'
+import { createProcessor } from '@mdx-js/mdx'
 import slugify from '@sindresorhus/slugify'
 import matter from 'gray-matter'
 import yaml from 'js-yaml'
+import { z } from 'zod'
 import { CONTENT_ROOT } from './config.ts'
 import { parseFrontmatterDate } from './date.ts'
 
@@ -46,7 +49,7 @@ export function validateMdxFileStructure(
     return { ok: false, reason: `invalid file type "${rawFilename}": expected an .mdx file` }
 
   // slugify can yield '' (e.g. symbol-only or non-Latin names), and the DB
-  // columns are varchar(200)/varchar(100) — catch both here, in the parse
+  // columns are varchar(200)/varchar(100); catch both here, in the parse
   // phase, so a bad name can never abort the sync transaction midway.
   const category = slugify(rawCategory)
   const slug = slugify(path.basename(rawFilename, path.extname(rawFilename)))
@@ -76,6 +79,100 @@ const FRONTMATTER_OPTIONS = {
   },
 }
 
+/** A 'yyyy-MM-dd' calendar date, anchored to CONTENT_TIME_ZONE midnight (ADR-0003). */
+function calendarDate(value: unknown, ctx: z.RefinementCtx): Date {
+  try {
+    return parseFrontmatterDate(value)
+  }
+  catch (err) {
+    ctx.addIssue({ code: 'custom', message: (err as Error).message })
+    return z.NEVER
+  }
+}
+
+// XML 1.0 forbids the C0 controls other than tab, LF and CR: one pasted
+// into a title or description would make the whole RSS feed unreadable.
+function hasControlCharacter(text: string): boolean {
+  return [...text].some((char) => {
+    const code = char.charCodeAt(0)
+    return code < 0x20 && code !== 0x09 && code !== 0x0A && code !== 0x0D
+  })
+}
+
+const NON_EMPTY = 'expected a non-empty string'
+const NO_CONTROL_CHARACTERS = 'contains a control character (invalid in the RSS feed)'
+
+/**
+ * The authoring contract for frontmatter. Strict: an unknown key (say a
+ * typo'd `updateAt`) fails the parse instead of being silently dropped.
+ */
+const frontmatterSchema = z.strictObject({
+  title: z.string(NON_EMPTY).refine(text => text.trim() !== '', NON_EMPTY).refine(text => !hasControlCharacter(text), NO_CONTROL_CHARACTERS),
+  description: z.string('expected a string when present').refine(text => !hasControlCharacter(text), NO_CONTROL_CHARACTERS).optional(),
+  author: z.string(NON_EMPTY).refine(text => text.trim() !== '', NON_EMPTY).max(100, 'exceeds 100 characters (varchar limit)'),
+  // optional() lets an absent key reach the date parser, which names the problem
+  createdAt: z.unknown().optional().transform(calendarDate),
+  updatedAt: z.unknown().optional().transform((value, ctx) => value == null
+    ? null
+    : calendarDate(value, ctx)),
+  isPublished: z.boolean('expected a boolean'),
+}).refine(
+  ({ createdAt, updatedAt }) => updatedAt === null || updatedAt >= createdAt,
+  {
+    path: ['updatedAt'],
+    message: 'must not be before createdAt',
+  },
+)
+
+// The frontend compiles post bodies with @mdx-js/mdx and refuses to run any
+// JavaScript in them (tianwei.io src/lib/mdx.tsx). Checking the same here
+// keeps a body it cannot render out of the database: otherwise the sync
+// succeeds and that post's page fails in production.
+const mdxParser = createProcessor()
+const JAVASCRIPT_NODES = new Set(['mdxjsEsm', 'mdxFlowExpression', 'mdxTextExpression'])
+
+interface MdxNode {
+  type: string
+  children?: MdxNode[]
+  attributes?: { type: string, value?: unknown }[]
+  position?: { start: { line: number } }
+}
+
+/**
+ * Why the frontend could not render this MDX body, if it could not: a
+ * syntax error, or JavaScript (import/export, `{expression}`, `prop={value}`,
+ * `{...spread}`). Line numbers count from the top of the file.
+ */
+function mdxBodyErrors(body: string, linesBeforeBody: number): string[] {
+  let tree: Root
+  try {
+    tree = mdxParser.parse(body)
+  }
+  catch (err) {
+    // a VFileMessage: `line` is relative to the body, `reason` carries body positions too
+    const { line, reason } = err as { line?: number, reason?: string }
+    const where = line === undefined
+      ? ''
+      : ` at line ${linesBeforeBody + line}`
+    return [`body: MDX syntax error${where}: ${(reason ?? String(err)).replace(/ \(\d+:\d+(?:-\d+:\d+)?\)/, '')}`]
+  }
+
+  const errors: string[] = []
+  const visit = (node: MdxNode): void => {
+    const jsAttribute = node.attributes?.some(attribute => attribute.type === 'mdxJsxExpressionAttribute'
+      || (typeof attribute.value === 'object' && attribute.value !== null)) === true
+    if (JAVASCRIPT_NODES.has(node.type) || jsAttribute) {
+      const line = node.position === undefined
+        ? ''
+        : ` at line ${linesBeforeBody + node.position.start.line}`
+      errors.push(`body: JavaScript is not allowed in posts${line} (${jsAttribute ? 'an expression or spread prop' : node.type}); give components string props`)
+    }
+    node.children?.forEach(visit)
+  }
+  visit(tree as MdxNode)
+  return errors
+}
+
 /**
  * Parse a single MDX file into a ContentRecord.
  * Throws with an aggregated message listing every invalid frontmatter field.
@@ -91,68 +188,37 @@ export function parseMdxFile(
   const raw = fs.readFileSync(filePath, 'utf-8')
 
   // readFileSync('utf-8') replaces invalid bytes with U+FFFD instead of
-  // erroring — a wrongly-encoded file would otherwise sync mojibake.
+  // erroring: a wrongly-encoded file would otherwise sync mojibake.
   if (raw.includes('�'))
     throw new Error(`[parser] "${filePath}" contains invalid UTF-8 (found U+FFFD replacement characters)`)
 
-  let data: ReturnType<typeof matter>['data']
+  let data: unknown
   let content: string
   try {
     ({ data, content } = matter(raw, FRONTMATTER_OPTIONS))
   }
   catch (err) {
-    // js-yaml errors carry a line number but no file — add the path
+    // js-yaml errors carry a line number but no file; add the path
     throw new Error(`[parser] Invalid frontmatter YAML in "${filePath}": ${(err as Error).message}`)
   }
 
-  const errors: string[] = []
-
-  if (!data.title || typeof data.title !== 'string')
-    errors.push(`title: expected a non-empty string`)
-
-  if (data.description !== undefined && typeof data.description !== 'string')
-    errors.push(`description: expected a string when present`)
-
-  if (!data.author || typeof data.author !== 'string')
-    errors.push(`author: expected a non-empty string`)
-  else if (data.author.length > 100)
-    errors.push(`author: exceeds 100 characters (varchar limit)`)
-
-  let createdAt: Date | undefined
-  try {
-    createdAt = parseFrontmatterDate(data.createdAt)
-  }
-  catch (err) {
-    errors.push(`createdAt: ${(err as Error).message}`)
-  }
-
-  let updatedAt: Date | undefined
-  if (data.updatedAt !== undefined && data.updatedAt !== null) {
-    try {
-      updatedAt = parseFrontmatterDate(data.updatedAt)
-      if (createdAt !== undefined && updatedAt.getTime() < createdAt.getTime())
-        errors.push(`updatedAt: must not be before createdAt`)
-    }
-    catch (err) {
-      errors.push(`updatedAt: ${(err as Error).message}`)
-    }
-  }
-
-  if (typeof data.isPublished !== 'boolean')
-    errors.push(`isPublished: expected a boolean`)
-
-  if (errors.length > 0 || createdAt === undefined)
-    throw new Error(`[parser] Invalid frontmatter in "${filePath}":\n  - ${errors.join('\n  - ')}`)
+  const frontmatter = frontmatterSchema.safeParse(data)
+  // gray-matter's content is the file after the closing '---'
+  const linesBeforeBody = raw.slice(0, raw.length - content.length).split('\n').length - 1
+  const errors = [
+    ...(frontmatter.success
+      ? []
+      : frontmatter.error.issues.map(issue => `${issue.path.join('.') || 'frontmatter'}: ${issue.message}`)),
+    ...mdxBodyErrors(content, linesBeforeBody),
+  ]
+  if (!frontmatter.success || errors.length > 0)
+    throw new Error(`[parser] Invalid post "${filePath}":\n  - ${errors.join('\n  - ')}`)
 
   return {
     slug: structure.slug,
     category: structure.category,
-    title: data.title,
-    ...(data.description !== undefined && { description: data.description }),
-    author: data.author,
-    createdAt,
-    ...(updatedAt !== undefined && { updatedAt }),
-    isPublished: data.isPublished,
+    ...frontmatter.data,
+    description: frontmatter.data.description ?? null,
     content,
   }
 }
@@ -161,7 +227,7 @@ export function parseMdxFile(
  * Parse every .mdx file under the content root into ContentRecord[].
  *
  * Fail-fast contract: if ANY file is invalid, this throws a single
- * aggregated error listing every failure — callers must not touch the
+ * aggregated error listing every failure; callers must not touch the
  * database with a partial parse.
  *
  * Also rejects duplicate slugs across categories: slug is the primary
@@ -174,7 +240,7 @@ export function parseAllPosts(contentRoot: string = CONTENT_ROOT): ContentRecord
 
   const categories = fs
     .readdirSync(contentRoot, { withFileTypes: true })
-    // follow symlinked category dirs too — isDirectory() is false for them
+    // follow symlinked category dirs too: isDirectory() is false for them
     .filter(dirent => dirent.isDirectory()
       || (dirent.isSymbolicLink() && fs.statSync(path.join(contentRoot, dirent.name)).isDirectory()))
     .map(dirent => dirent.name)

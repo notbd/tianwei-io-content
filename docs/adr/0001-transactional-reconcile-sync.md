@@ -9,7 +9,7 @@ The original production sync deleted every row in `posts`, then re-inserted
 posts one by one, with no transaction. Two consequences:
 
 1. The live API could observe an **empty or partially-populated table**
-   during every deploy — readers got whatever happened to be committed at
+   during every deploy: readers got whatever happened to be committed at
    that instant.
 2. Serial ids were reissued on every deploy, and a mid-loop failure left
    the database in a permanently partial state.
@@ -29,7 +29,7 @@ All writes go through a single entry point, `src/sync.ts#syncPosts`:
 - **One transaction, reconcile semantics.** Upsert all parsed records
   keyed on `slug` (ids of unchanged posts stay stable) and delete rows
   whose slug no longer exists on disk. Under READ COMMITTED, readers see
-  either the previous state or the new state — never an intermediate one.
+  either the previous state or the new state, never an intermediate one.
 - **One writer at a time.** The transaction's first statement takes
   `pg_advisory_xact_lock` on a fixed key (`SYNC_LOCK_KEY`), so a second
   sync (a manual `sync:prod` overlapping a deploy, or the local watcher)
@@ -40,14 +40,14 @@ All writes go through a single entry point, `src/sync.ts#syncPosts`:
   execute unless explicitly flagged (`--allow-empty`), so a bad checkout
   or wrong path can never wipe production.
 - **The watcher collapses event bursts** into one debounced reconcile,
-  serialized by a running/pending latch — overlapping writes are
+  serialized by a running/pending latch; overlapping writes are
   structurally impossible.
 
 ## Consequences
 
 - Deploys are atomic from the reader's perspective; the frontend's cache
   warming never fetches a half-synced catalog.
-- Renames, deletions and edits all reduce to "reconcile disk vs table" —
+- Renames, deletions and edits all reduce to "reconcile disk vs table";
   there is no per-event mutation logic left to get wrong.
 - A full reconcile on every change is O(total posts), which is trivially
   cheap at blog scale and stays acceptable for thousands of posts.
