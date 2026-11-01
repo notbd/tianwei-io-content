@@ -58,7 +58,7 @@ describe('parseMdxFile', () => {
     expect(record.description).toBeUndefined()
   })
 
-  it('treats updatedAt as optional and parses it as UTC midnight', () => {
+  it('treats updatedAt as optional and anchors it to content-zone midnight', () => {
     root = makeContentDir({
       'articles/a.mdx': mdxDoc(),
     })

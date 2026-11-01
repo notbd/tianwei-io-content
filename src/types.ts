@@ -18,10 +18,10 @@ export interface ContentRecord {
   /** Author name */
   author: string
 
-  /** Publication date (always midnight UTC) */
+  /** Publication date: midnight in CONTENT_TIME_ZONE, stored as a UTC instant (ADR-0003) */
   createdAt: Date
 
-  /** Optional last-updated date (always midnight UTC, never before createdAt) */
+  /** Optional last-updated date: same encoding as createdAt, never before it */
   updatedAt?: Date
 
   /** Whether this record is visible on the frontend */
