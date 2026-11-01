@@ -26,7 +26,7 @@ try {
 catch (err) {
   console.error('[local-dev] Initial sync failed:', (err as Error).message)
   if (watch)
-    console.info('[local-dev] Continuing to watch — fix the content and save again.')
+    console.info('[local-dev] Continuing to watch: fix the content and save again.')
   else
     process.exitCode = 1
 }

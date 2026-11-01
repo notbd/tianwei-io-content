@@ -1,14 +1,14 @@
 # ADR-0003: Calendar dates are authored in a configured content time zone
 
 - **Status**: Accepted (2026-07)
-- **Repos affected**: tianwei-io-content (parse), tianwei.io (display — see its ADR-0004)
+- **Repos affected**: tianwei-io-content (parse), tianwei.io (display; see its ADR-0004)
 
 ## Context
 
 Frontmatter dates are calendar dates (`createdAt: 2025-10-23`) with no
 time component. Two earlier bugs came from leaving their zone implicit:
 
-1. date-fns parsed them at **machine-local** midnight — a laptop in
+1. date-fns parsed them at **machine-local** midnight: a laptop in
    Toronto and a UTC CI runner stored different instants for the same file.
 2. After normalizing storage to UTC midnight, any renderer that *didn't*
    force UTC display shifted the date a day (Oct 23 00:00Z is Oct 22
@@ -45,5 +45,5 @@ One explicit model, one constant per side:
   encoding display one day early in ET, so the content re-sync must
   deploy before (or with) the frontend's ET display change.
 - If per-visitor timezone display is ever wanted, storage needs no
-  change — instants are unambiguous; only the display constant would
+  change: instants are unambiguous; only the display constant would
   become a user preference.

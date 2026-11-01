@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "private": true,
   "packageManager": "pnpm@10.34.9",
-  "description": "Content engine for tianwei.io — parses MDX content and syncs it to Postgres",
+  "description": "Content engine for tianwei.io: parses MDX content and syncs it to Postgres",
   "author": "Tianwei Zhang",
   "license": "AGPL-3.0-only",
   "engines": {

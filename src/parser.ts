@@ -49,7 +49,7 @@ export function validateMdxFileStructure(
     return { ok: false, reason: `invalid file type "${rawFilename}": expected an .mdx file` }
 
   // slugify can yield '' (e.g. symbol-only or non-Latin names), and the DB
-  // columns are varchar(200)/varchar(100) — catch both here, in the parse
+  // columns are varchar(200)/varchar(100); catch both here, in the parse
   // phase, so a bad name can never abort the sync transaction midway.
   const category = slugify(rawCategory)
   const slug = slugify(path.basename(rawFilename, path.extname(rawFilename)))
@@ -188,7 +188,7 @@ export function parseMdxFile(
   const raw = fs.readFileSync(filePath, 'utf-8')
 
   // readFileSync('utf-8') replaces invalid bytes with U+FFFD instead of
-  // erroring — a wrongly-encoded file would otherwise sync mojibake.
+  // erroring: a wrongly-encoded file would otherwise sync mojibake.
   if (raw.includes('�'))
     throw new Error(`[parser] "${filePath}" contains invalid UTF-8 (found U+FFFD replacement characters)`)
 
@@ -198,7 +198,7 @@ export function parseMdxFile(
     ({ data, content } = matter(raw, FRONTMATTER_OPTIONS))
   }
   catch (err) {
-    // js-yaml errors carry a line number but no file — add the path
+    // js-yaml errors carry a line number but no file; add the path
     throw new Error(`[parser] Invalid frontmatter YAML in "${filePath}": ${(err as Error).message}`)
   }
 
@@ -227,7 +227,7 @@ export function parseMdxFile(
  * Parse every .mdx file under the content root into ContentRecord[].
  *
  * Fail-fast contract: if ANY file is invalid, this throws a single
- * aggregated error listing every failure — callers must not touch the
+ * aggregated error listing every failure; callers must not touch the
  * database with a partial parse.
  *
  * Also rejects duplicate slugs across categories: slug is the primary
@@ -240,7 +240,7 @@ export function parseAllPosts(contentRoot: string = CONTENT_ROOT): ContentRecord
 
   const categories = fs
     .readdirSync(contentRoot, { withFileTypes: true })
-    // follow symlinked category dirs too — isDirectory() is false for them
+    // follow symlinked category dirs too: isDirectory() is false for them
     .filter(dirent => dirent.isDirectory()
       || (dirent.isSymbolicLink() && fs.statSync(path.join(contentRoot, dirent.name)).isDirectory()))
     .map(dirent => dirent.name)

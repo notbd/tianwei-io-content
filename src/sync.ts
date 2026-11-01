@@ -40,14 +40,14 @@ export interface SyncOptions {
 /**
  * Reconcile the posts table with the content directory, atomically.
  *
- * 1. Parse everything first — any invalid file aborts before the
+ * 1. Parse everything first: any invalid file aborts before the
  *    database is touched (parseAllPosts throws an aggregated error).
  * 2. In a single transaction: upsert every parsed record (keyed on
  *    slug, so ids of unchanged posts are stable) and delete rows whose
  *    slug no longer exists on disk (handles file renames/removals).
  *
  * Readers under READ COMMITTED observe either the previous state or
- * the new state — never an empty or partially-synced table.
+ * the new state, never an empty or partially-synced table.
  *
  * Writers are serialized: the transaction first takes an advisory lock,
  * so a second sync (a manual `sync:prod` during a deploy, or the local

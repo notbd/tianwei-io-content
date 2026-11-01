@@ -16,6 +16,6 @@
 !.env.example
 
 # Drizzle
-# NOTE: drizzle/migrations/ (including meta/) is committed — it is the
+# NOTE: drizzle/migrations/ (including meta/) is committed; it is the
 # migration history the production database depends on.
 drizzle/.cache/

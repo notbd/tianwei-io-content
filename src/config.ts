@@ -14,7 +14,7 @@ export const CONTENT_ROOT = path.resolve(process.cwd(), 'content')
  * `createdAt: 2025-10-23` means "October 23 in this zone"; it is stored
  * as the UTC instant of that zone's midnight.
  *
- * MUST match DISPLAY_TIME_ZONE in the tianwei.io frontend — the pairing
+ * MUST match DISPLAY_TIME_ZONE in the tianwei.io frontend: the pairing
  * is what makes stored instants render back as the authored calendar
  * date. Changing either requires a full re-sync. See docs/adr/0003.
  */

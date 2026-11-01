@@ -47,9 +47,9 @@ describe('syncPosts', () => {
       isPublished: true,
     })
     expect(rows[0]!.createdAt.getTime()).toBe(Date.UTC(2024, 0, 5, 5)) // EST midnight
-    // updatedAt is optional — absent in frontmatter means NULL in the DB
+    // updatedAt is optional: absent in frontmatter means NULL in the DB
     expect(rows[0]!.updatedAt).toBeNull()
-    // unpublished posts are stored too — visibility filtering is the API's job
+    // unpublished posts are stored too: visibility filtering is the API's job
     expect(rows[1]).toMatchObject({ slug: 'beta', isPublished: false })
   })
 
