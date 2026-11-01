@@ -2,9 +2,10 @@ import path from 'node:path'
 import process from 'node:process'
 
 /**
- * Default content directory: /content at the repository root.
- * All parsing entry points accept an explicit root so tests can
- * point at fixture directories instead.
+ * Default content directory: `content/` under the process cwd, which is
+ * the repository root for every pnpm script. All parsing entry points
+ * accept an explicit root so tests can point at fixture directories
+ * instead.
  */
 export const CONTENT_ROOT = path.resolve(process.cwd(), 'content')
 

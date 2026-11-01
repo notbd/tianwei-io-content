@@ -81,7 +81,7 @@ export function watchContent(db: Db, options: WatchOptions = {}): ContentWatcher
   })
 
   watcher.on('all', (event, filePath) => {
-    // chokidar v4 has no glob support — filter here
+    // chokidar has had no glob support since v4; filter here
     if (!filePath.toLowerCase().endsWith('.mdx'))
       return
     console.info(`[watcher] ${event}: ${filePath}`)

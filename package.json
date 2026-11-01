@@ -3,12 +3,12 @@
   "type": "module",
   "version": "1.0.0",
   "private": true,
-  "packageManager": "pnpm@10.23.0",
+  "packageManager": "pnpm@10.34.9",
   "description": "Content engine for tianwei.io — parses MDX content and syncs it to Postgres",
   "author": "Tianwei Zhang",
   "license": "AGPL-3.0-only",
   "engines": {
-    "node": ">=22"
+    "node": "26.x"
   },
   "scripts": {
     "dev:up": "pnpm db:up && pnpm db:migrate && pnpm content:start",
@@ -30,22 +30,24 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@sindresorhus/slugify": "^3.0.0",
-    "chokidar": "^5.0.0",
-    "dotenv": "^17.4.2",
-    "drizzle-orm": "^0.45.2",
+    "@sindresorhus/slugify": "^3.0.1",
+    "chokidar": "^6.0.0",
+    "dotenv": "^18.0.9",
+    "drizzle-orm": "^0.45.4",
     "gray-matter": "^4.0.3",
-    "pg": "^8.22.0"
+    "js-yaml": "^3.15.2",
+    "pg": "^8.23.1"
   },
   "devDependencies": {
-    "@antfu/eslint-config": "^9.1.0",
-    "@electric-sql/pglite": "^0.5.4",
-    "@types/node": "^26.1.1",
-    "@types/pg": "^8.20.0",
-    "drizzle-kit": "^0.31.10",
-    "eslint": "^10.6.0",
-    "tsx": "^4.23.0",
+    "@antfu/eslint-config": "^10.0.0",
+    "@electric-sql/pglite": "^0.5.14",
+    "@types/js-yaml": "^3.12.10",
+    "@types/node": "^26.6.6",
+    "@types/pg": "^8.23.1",
+    "drizzle-kit": "^0.31.11",
+    "eslint": "^10.14.0",
+    "tsx": "^4.23.15",
     "typescript": "^6.0.3",
-    "vitest": "^4.1.10"
+    "vitest": "^5.0.5"
   }
 }

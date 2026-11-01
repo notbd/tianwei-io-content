@@ -1,6 +1,6 @@
 # ADR-0001: Transactional reconcile instead of clear-then-reinsert
 
-- **Status**: Accepted (2026-07)
+- **Status**: Accepted (2026-07); writer lock added 2026-10
 - **Repos affected**: tianwei-io-content (writer), tianwei-io-api (reader)
 
 ## Context
@@ -30,6 +30,12 @@ All writes go through a single entry point, `src/sync.ts#syncPosts`:
   keyed on `slug` (ids of unchanged posts stay stable) and delete rows
   whose slug no longer exists on disk. Under READ COMMITTED, readers see
   either the previous state or the new state — never an intermediate one.
+- **One writer at a time.** The transaction's first statement takes
+  `pg_advisory_xact_lock` on a fixed key (`SYNC_LOCK_KEY`), so a second
+  sync (a manual `sync:prod` overlapping a deploy, or the local watcher)
+  waits for the first to commit and then diffs against the committed
+  rows. Transaction-scoped rather than session-scoped: commit or rollback
+  always releases it, and it works through Neon's transaction-mode pooler.
 - **Empty-parse guard.** A run that would delete every post refuses to
   execute unless explicitly flagged (`--allow-empty`), so a bad checkout
   or wrong path can never wipe production.

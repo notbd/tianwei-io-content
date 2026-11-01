@@ -12,6 +12,9 @@ import { parseAllPosts } from './parser.ts'
  */
 export type Db = PgDatabase<PgQueryResultHKT, typeof schema>
 
+/** Arbitrary but fixed pg_advisory_xact_lock key; every writer must use the same one. */
+const SYNC_LOCK_KEY = 726_100_001
+
 export interface SyncOptions {
   /** Directory to parse; defaults to the repo's /content */
   contentRoot?: string
@@ -34,6 +37,12 @@ export interface SyncOptions {
  *
  * Readers under READ COMMITTED observe either the previous state or
  * the new state — never an empty or partially-synced table.
+ *
+ * Writers are serialized: the transaction first takes an advisory lock,
+ * so a second sync (a manual `sync:prod` during a deploy, or the local
+ * watcher) waits and then diffs against the committed result. Without
+ * it, two syncs starting from the same rows would each delete only the
+ * stale slugs they saw and could commit a mix of both content sets.
  */
 export async function syncPosts(db: Db, options: SyncOptions = {}): Promise<SyncResult> {
   const contentRoot = options.contentRoot ?? CONTENT_ROOT
@@ -48,6 +57,10 @@ export async function syncPosts(db: Db, options: SyncOptions = {}): Promise<Sync
   }
 
   return db.transaction(async (tx) => {
+    // Transaction-scoped, so commit or rollback always releases it (and it
+    // works through Neon's transaction-mode pooler, unlike session locks).
+    await tx.execute(sql`select pg_advisory_xact_lock(${SYNC_LOCK_KEY})`)
+
     const existing = await tx.select({ slug: posts.slug }).from(posts)
 
     const diskSlugs = new Set(records.map(record => record.slug))

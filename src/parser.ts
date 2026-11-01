@@ -3,112 +3,17 @@ import fs from 'node:fs'
 import path from 'node:path'
 import slugify from '@sindresorhus/slugify'
 import matter from 'gray-matter'
-import { CONTENT_ROOT, CONTENT_TIME_ZONE } from './config.ts'
-
-const DATE_ONLY_RE = /^(\d{4})-(\d{2})-(\d{2})$/
-
-/** Milliseconds the given zone's wall clock is ahead of UTC at `utcTs`. */
-function timeZoneOffsetMs(utcTs: number, timeZone: string): number {
-  const formatter = new Intl.DateTimeFormat('en-US', {
-    timeZone,
-    hourCycle: 'h23',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-  })
-  const parts = Object.fromEntries(
-    formatter.formatToParts(new Date(utcTs)).map(part => [part.type, part.value]),
-  )
-  const wallClockAsUtc = Date.UTC(
-    Number(parts.year),
-    Number(parts.month) - 1,
-    Number(parts.day),
-    Number(parts.hour),
-    Number(parts.minute),
-    Number(parts.second),
-  )
-  return wallClockAsUtc - utcTs
-}
-
-/**
- * The UTC instant of midnight of the given calendar date in the given
- * zone. Two correction passes converge across DST transitions.
- */
-export function zonedMidnight(year: number, month: number, day: number, timeZone: string): Date {
-  let ts = Date.UTC(year, month - 1, day)
-  for (let i = 0; i < 2; i++)
-    ts = Date.UTC(year, month - 1, day) - timeZoneOffsetMs(ts, timeZone)
-  return new Date(ts)
-}
-
-/**
- * Parse a frontmatter date value into the UTC instant of midnight in
- * CONTENT_TIME_ZONE — i.e. `createdAt: 2025-10-23` means "October 23
- * where the author lives", stored as an unambiguous instant.
- *
- * Accepts:
- * - 'yyyy-MM-dd' strings
- * - Date instances (js-yaml parses unquoted `2024-01-05` as a UTC-midnight
- *   Date; only its calendar date is meaningful, so it is re-anchored to
- *   the content time zone like the string form)
- *
- * Deterministic regardless of machine timezone. Throws on anything else,
- * including calendar-impossible dates such as 2024-02-30.
- */
-export function parseFrontmatterDate(value: unknown): Date {
-  if (value === undefined || value === null)
-    throw new Error(`[parser/date] Missing value: expected 'yyyy-MM-dd'`)
-
-  let year: number, month: number, day: number
-
-  if (value instanceof Date) {
-    if (Number.isNaN(value.getTime()))
-      throw new Error(`[parser/date] Invalid Date instance`)
-    // js-yaml only yields a non-midnight Date when the frontmatter had a
-    // time/zone component (e.g. `2024-01-05 23:00:00-05:00`) — silently
-    // truncating that to a calendar date could shift it by a day.
-    if (value.getUTCHours() !== 0 || value.getUTCMinutes() !== 0
-      || value.getUTCSeconds() !== 0 || value.getUTCMilliseconds() !== 0) {
-      throw new Error(`[parser/date] Got a timestamp (${value.toISOString()}); expected a date-only 'yyyy-MM-dd'`)
-    }
-    year = value.getUTCFullYear()
-    month = value.getUTCMonth() + 1
-    day = value.getUTCDate()
-  }
-  else if (typeof value === 'string') {
-    const match = DATE_ONLY_RE.exec(value.trim())
-    if (!match)
-      throw new Error(`[parser/date] Invalid date format for '${value}': expected 'yyyy-MM-dd'`)
-
-    year = Number(match[1])
-    month = Number(match[2])
-    day = Number(match[3])
-
-    // Round-trip check rejects impossible dates (e.g. 2024-02-30 rolls over to March)
-    const probe = new Date(Date.UTC(year, month - 1, day))
-    const roundTrips
-      = probe.getUTCFullYear() === year
-        && probe.getUTCMonth() === month - 1
-        && probe.getUTCDate() === day
-    if (!roundTrips)
-      throw new Error(`[parser/date] Impossible calendar date '${value}'`)
-  }
-  else {
-    throw new TypeError(`[parser/date] Unsupported type '${typeof value}': expected string or Date`)
-  }
-
-  return zonedMidnight(year, month, day, CONTENT_TIME_ZONE)
-}
+import yaml from 'js-yaml'
+import { CONTENT_ROOT } from './config.ts'
+import { parseFrontmatterDate } from './date.ts'
 
 /**
  * Validate that the given file path follows the required structure:
  *   {contentRoot}/{category}/{post_name}.mdx
  *
- * Pure check: never logs. Returns the derived category and slug,
- * or a machine-readable failure reason.
+ * Only touches the filesystem to confirm the category directory exists;
+ * never logs. Returns the derived category and slug, or a
+ * machine-readable failure reason.
  */
 export function validateMdxFileStructure(
   filePath: string,
@@ -159,6 +64,19 @@ export function validateMdxFileStructure(
 }
 
 /**
+ * gray-matter's default YAML schema turns an unquoted `2024-02-30` into a
+ * Date that has already rolled over to March 1, before any validation can
+ * see what the author wrote. CORE_SCHEMA has no timestamp type (and no JS
+ * types, so load() is safe), which leaves dates as the authored strings
+ * for parseFrontmatterDate to check.
+ */
+const FRONTMATTER_OPTIONS = {
+  engines: {
+    yaml: (input: string): object => yaml.load(input, { schema: yaml.CORE_SCHEMA }),
+  },
+}
+
+/**
  * Parse a single MDX file into a ContentRecord.
  * Throws with an aggregated message listing every invalid frontmatter field.
  */
@@ -180,7 +98,7 @@ export function parseMdxFile(
   let data: ReturnType<typeof matter>['data']
   let content: string
   try {
-    ({ data, content } = matter(raw))
+    ({ data, content } = matter(raw, FRONTMATTER_OPTIONS))
   }
   catch (err) {
     // js-yaml errors carry a line number but no file — add the path
@@ -230,7 +148,7 @@ export function parseMdxFile(
     slug: structure.slug,
     category: structure.category,
     title: data.title,
-    ...(data.description !== undefined && { description: data.description as string }),
+    ...(data.description !== undefined && { description: data.description }),
     author: data.author,
     createdAt,
     ...(updatedAt !== undefined && { updatedAt }),

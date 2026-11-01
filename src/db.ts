@@ -27,8 +27,10 @@ export function createDb() {
   const pool = remoteUrl
     ? new Pool({
         connectionString: remoteUrl,
-        // verify certificates (Neon serves public-CA certs);
-        // rejectUnauthorized:false would silently disable TLS verification
+        // Only applies when the URL has no sslmode: pg lets the URL's
+        // sslmode override this option, so DATABASE_URL must say
+        // sslmode=verify-full (Neon serves public-CA certs). pg 8 still
+        // verifies on 'require'; pg 9 will not (libpq semantics).
         ssl: true,
       })
     : new Pool({

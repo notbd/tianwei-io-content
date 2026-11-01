@@ -2,7 +2,7 @@
 <samp>
 <h1>tianwei-io-content</h1>
 
-[![CI](https://github.com/notbd/tianwei-io-content/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/notbd/tianwei-io-content/actions/workflows/ci.yml)
+[![CI](https://github.com/notbd/tianwei-io-content/actions/workflows/ci.yml/badge.svg)](https://github.com/notbd/tianwei-io-content/actions/workflows/ci.yml)
 [![Deploy](https://github.com/notbd/tianwei-io-content/actions/workflows/deploy-content.yml/badge.svg?branch=main)](https://github.com/notbd/tianwei-io-content/actions/workflows/deploy-content.yml)
 
 The content engine of my personal website [tianwei.io](https://tianwei.io).
@@ -40,7 +40,7 @@ The content engine of my personal website [tianwei.io](https://tianwei.io).
 | `src/` | Library code: frontmatter parsing, transactional sync, file watcher |
 | `drizzle/` | Database schema + committed migration history (`migrations/`) |
 | `scripts/` | Thin CLI entry points (local dev, prod sync, frontend revalidation) |
-| `tests/` | Vitest suite — unit (parser) + integration (sync against PGlite) |
+| `tests/` | Vitest suite — unit (parser, dates, path structure) + integration (migration chain, sync, watcher; all against PGlite) |
 
 <h2>Sync Semantics</h2>
 
@@ -49,14 +49,15 @@ A sync is a single **transactional reconcile** (`src/sync.ts`):
 - Every `.mdx` file is parsed and validated first — any invalid file aborts the run before the database is touched.
 - Inside one transaction: all parsed posts are upserted (keyed on slug, so ids stay stable) and rows whose files no longer exist are deleted.
 - Readers never observe an empty or partially-synced table; renames can't leave orphaned rows.
+- Concurrent syncs (e.g. a manual `sync:prod` during a deploy) are serialized by a transaction-scoped Postgres advisory lock, so they never interleave.
 - A parse that yields zero posts is rejected unless `--allow-empty` is passed, so a bad checkout can never wipe the production table.
-- `createdAt` frontmatter is a calendar date authored in **`CONTENT_TIME_ZONE`** (`America/New_York`, see `src/config.ts`) and stored as the UTC instant of that zone's midnight — deterministic regardless of machine timezone. Optional `updatedAt` follows the same rules and must not precede `createdAt`. See [ADR-0003](./docs/adr/0003-content-time-zone.md).
+- `createdAt` frontmatter is a calendar date written as `yyyy-MM-dd` and authored in **`CONTENT_TIME_ZONE`** (`America/New_York`, see `src/config.ts`); it is stored as the UTC instant of that zone's midnight, deterministic regardless of machine timezone. Any other form, and impossible dates such as `2024-02-30`, fail the parse and abort the sync. Optional `updatedAt` follows the same rules and must not precede `createdAt`. See [ADR-0003](./docs/adr/0003-content-time-zone.md).
 
 Design records live in [`docs/adr/`](./docs/adr/).
 
 <h2>Local Run</h2>
 
-Prerequisites: **Node.js ≥ 22**, **pnpm 10**, and **Docker**.
+Prerequisites: **Node.js 26** (see `.nvmrc`), **pnpm 10**, and **Docker**.
 
 ```shell
 git clone git@github.com:notbd/tianwei-io-content.git
@@ -96,7 +97,7 @@ See `.env.example` for the full annotated list. Locally, `LOCAL_*` variables dri
 
 Production sync is fully automated:
 
-- CI (`.github/workflows/ci.yml`) runs lint, typecheck and tests on every push and pull request.
+- CI (`.github/workflows/ci.yml`) runs lint, typecheck and tests on every pull request.
 - On every push to `main` touching content or sync code, `.github/workflows/deploy-content.yml` re-runs the checks, applies pending migrations (`drizzle-kit migrate` — the committed history under `drizzle/migrations/`), performs the transactional reconcile against Neon, and revalidates the frontend cache. Deploys are serialized via a concurrency group.
 
 Result: the **remote database is always in sync** with the MDX content stored in the `main` branch of this repo.

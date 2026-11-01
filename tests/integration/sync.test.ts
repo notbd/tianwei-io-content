@@ -1,6 +1,8 @@
 import fs from 'node:fs'
 import path from 'node:path'
+import { drizzle } from 'drizzle-orm/pglite'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import * as schema from '../../drizzle/schema.ts'
 import { posts } from '../../drizzle/schema.ts'
 import { syncPosts } from '../../src/sync.ts'
 import { makeContentDir, mdxDoc } from '../helpers/fixture-content.ts'
@@ -84,7 +86,9 @@ describe('syncPosts', () => {
   })
 
   it('updates changed posts in place', async () => {
-    root = makeContentDir({ 'articles/alpha.mdx': mdxDoc({ title: 'Alpha' }) })
+    root = makeContentDir({
+      'articles/alpha.mdx': mdxDoc({ title: 'Alpha' }),
+    })
     await syncPosts(testDb.db, { contentRoot: root })
     const [original] = await allRows()
 
@@ -117,7 +121,9 @@ describe('syncPosts', () => {
   })
 
   it('handles file renames without leaving orphaned rows', async () => {
-    root = makeContentDir({ 'articles/old-name.mdx': mdxDoc() })
+    root = makeContentDir({
+      'articles/old-name.mdx': mdxDoc(),
+    })
     await syncPosts(testDb.db, { contentRoot: root })
 
     fs.renameSync(
@@ -131,7 +137,9 @@ describe('syncPosts', () => {
   })
 
   it('leaves the database untouched when any file is invalid', async () => {
-    root = makeContentDir({ 'articles/alpha.mdx': mdxDoc({ title: 'Alpha' }) })
+    root = makeContentDir({
+      'articles/alpha.mdx': mdxDoc({ title: 'Alpha' }),
+    })
     await syncPosts(testDb.db, { contentRoot: root })
     const before = await allRows()
 
@@ -142,7 +150,9 @@ describe('syncPosts', () => {
   })
 
   it('refuses an empty reconcile unless allowEmpty is set', async () => {
-    root = makeContentDir({ 'articles/alpha.mdx': mdxDoc() })
+    root = makeContentDir({
+      'articles/alpha.mdx': mdxDoc(),
+    })
     await syncPosts(testDb.db, { contentRoot: root })
 
     fs.rmSync(path.join(root, 'articles/alpha.mdx'))
@@ -156,7 +166,9 @@ describe('syncPosts', () => {
   })
 
   it('rejects duplicate slugs before touching the database', async () => {
-    root = makeContentDir({ 'articles/alpha.mdx': mdxDoc({ title: 'Original' }) })
+    root = makeContentDir({
+      'articles/alpha.mdx': mdxDoc({ title: 'Original' }),
+    })
     await syncPosts(testDb.db, { contentRoot: root })
 
     // second category with the same filename → same slug
@@ -166,5 +178,35 @@ describe('syncPosts', () => {
     await expect(syncPosts(testDb.db, { contentRoot: root })).rejects.toThrow(/Duplicate slugs/)
     const [row] = await allRows()
     expect(row!.title).toBe('Original')
+  })
+
+  it('takes a transaction-scoped advisory lock before reading existing rows', async () => {
+    // PGlite is a single connection, so two writers cannot actually contend
+    // here; pin the two properties the serialization relies on instead.
+    const queries: string[] = []
+    const db = drizzle(testDb.client, {
+      schema,
+      logger: {
+        logQuery: (query) => {
+          queries.push(query)
+        },
+      },
+    })
+    root = makeContentDir({
+      'articles/alpha.mdx': mdxDoc(),
+    })
+    await syncPosts(db, { contentRoot: root })
+
+    // 1. the lock is the transaction's first statement, before the slug read
+    // (transaction control is dropped: whether the driver logs begin/commit
+    // is a driver detail, not part of what is being pinned)
+    const statements = queries.filter(query => !/^(?:begin|commit|rollback)\b/i.test(query))
+    expect(statements[0]).toMatch(/^select pg_advisory_xact_lock\(\$1\)$/)
+    expect(statements[1]).toMatch(/^select "slug" from "posts"/)
+    // 2. commit releases it: nothing is left held on the session
+    const { rows } = await testDb.client.query(`select count(*)::int as held from pg_locks where locktype = 'advisory'`)
+    expect(rows).toEqual([
+      { held: 0 },
+    ])
   })
 })

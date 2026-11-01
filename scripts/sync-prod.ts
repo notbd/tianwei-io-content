@@ -18,7 +18,9 @@ async function main() {
     const result = await syncPosts(db, {
       allowEmpty: process.argv.includes('--allow-empty'),
     })
-    const deletions = result.deletedSlugs.length > 0 ? ` (${result.deletedSlugs.join(', ')})` : ''
+    const deletions = result.deletedSlugs.length > 0
+      ? ` (${result.deletedSlugs.join(', ')})`
+      : ''
     console.info(`[sync-prod] Completed: ${result.upserted} upserted, ${result.deleted} deleted${deletions}`)
   }
   catch (err) {
