@@ -33,6 +33,7 @@ describe('parseMdxFile', () => {
       author: 'Tianwei Zhang',
       // midnight in the content time zone (EDT in October)
       createdAt: new Date(Date.UTC(2025, 9, 23, 4)),
+      updatedAt: null,
       isPublished: true,
       // gray-matter preserves one leading newline after the frontmatter block
       content: '\n# Heading\n\nBody text.\n',
@@ -55,14 +56,14 @@ describe('parseMdxFile', () => {
       'articles/a.mdx': mdxDoc({ description: undefined }),
     })
     const record = parseMdxFile(path.join(root, 'articles/a.mdx'), root)
-    expect(record.description).toBeUndefined()
+    expect(record.description).toBeNull()
   })
 
   it('treats updatedAt as optional and anchors it to content-zone midnight', () => {
     root = makeContentDir({
       'articles/a.mdx': mdxDoc(),
     })
-    expect(parseMdxFile(path.join(root, 'articles/a.mdx'), root).updatedAt).toBeUndefined()
+    expect(parseMdxFile(path.join(root, 'articles/a.mdx'), root).updatedAt).toBeNull()
 
     fs.writeFileSync(
       path.join(root, 'articles/a.mdx'),
@@ -94,6 +95,24 @@ describe('parseMdxFile', () => {
     })
     expect(() => parseMdxFile(path.join(root, 'articles/a.mdx'), root))
       .toThrow(/createdAt:.*Invalid date format/)
+  })
+
+  it('rejects control characters in the title and description (they would break the RSS feed)', () => {
+    root = makeContentDir({
+      // YAML escapes: js-yaml already refuses raw control characters in the file
+      'articles/a.mdx': mdxDoc({ title: '"Tab\\tis fine, vertical tab\\v is not"', description: '"Form\\ffeed"' }),
+    })
+    const run = () => parseMdxFile(path.join(root, 'articles/a.mdx'), root)
+    expect(run).toThrow(/title: contains a control character/)
+    expect(run).toThrow(/description: contains a control character/)
+  })
+
+  it('rejects an unknown key instead of silently dropping it', () => {
+    root = makeContentDir({
+      'articles/a.mdx': mdxDoc().replace('isPublished', 'updateAt: 2024-07-01\nisPublished'),
+    })
+    expect(() => parseMdxFile(path.join(root, 'articles/a.mdx'), root))
+      .toThrow(/frontmatter: Unrecognized key: "updateAt"/)
   })
 
   it('rejects a missing title', () => {
