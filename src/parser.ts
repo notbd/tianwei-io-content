@@ -66,7 +66,7 @@ export function parseFrontmatterDate(value: unknown): Date {
 
   if (value instanceof Date) {
     if (Number.isNaN(value.getTime()))
-      throw new Error(`[parser/date] Invalid Date instance`)
+      throw new TypeError(`[parser/date] Invalid Date instance`)
     // js-yaml only yields a non-midnight Date when the frontmatter had a
     // time/zone component (e.g. `2024-01-05 23:00:00-05:00`) — silently
     // truncating that to a calendar date could shift it by a day.

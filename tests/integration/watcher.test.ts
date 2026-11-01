@@ -52,7 +52,9 @@ async function slugsInDb() {
 
 describe('watchContent', () => {
   it('reconciles adds, edits, and deletes', async () => {
-    root = makeContentDir({ 'articles/existing.mdx': mdxDoc({ title: 'Existing' }) })
+    root = makeContentDir({
+      'articles/existing.mdx': mdxDoc({ title: 'Existing' }),
+    })
     const { instance, resolvers } = makeWatcher(root)
     watcher = instance
     await instance.ready
@@ -69,7 +71,9 @@ describe('watchContent', () => {
   }, 15_000)
 
   it('collapses a burst of events into one reconcile and ignores non-mdx files', async () => {
-    root = makeContentDir({ 'articles/base.mdx': mdxDoc() })
+    root = makeContentDir({
+      'articles/base.mdx': mdxDoc(),
+    })
     const syncSpy = vi.fn()
     const resolvers: (() => void)[] = []
     watcher = watchContent(testDb.db, {
@@ -97,7 +101,9 @@ describe('watchContent', () => {
   }, 15_000)
 
   it('keeps the old state and keeps watching after a bad save', async () => {
-    root = makeContentDir({ 'articles/good.mdx': mdxDoc({ title: 'Good' }) })
+    root = makeContentDir({
+      'articles/good.mdx': mdxDoc({ title: 'Good' }),
+    })
     const { instance, resolvers, errors } = makeWatcher(root)
     watcher = instance
     await instance.ready

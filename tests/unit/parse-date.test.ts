@@ -33,8 +33,16 @@ describe('parseFrontmatterDate', () => {
   })
 
   it.each([
-    ['2025-03-09', Date.UTC(2025, 2, 9, 5)], // spring-forward day: midnight is still EST
-    ['2025-11-02', Date.UTC(2025, 10, 2, 4)], // fall-back day: midnight is still EDT
+    // spring-forward day: midnight is still EST
+    [
+      '2025-03-09',
+      Date.UTC(2025, 2, 9, 5),
+    ],
+    // fall-back day: midnight is still EDT
+    [
+      '2025-11-02',
+      Date.UTC(2025, 10, 2, 4),
+    ],
   ])('handles the DST transition day %s', (value, expected) => {
     const parsed = parseFrontmatterDate(value)
     expect(parsed.getTime()).toBe(expected)
@@ -45,7 +53,12 @@ describe('parseFrontmatterDate', () => {
     // The historical bug: date-fns parse(value, 'yyyy-MM-dd', new Date())
     // produced machine-local midnight, so a laptop in Toronto and a UTC CI
     // runner wrote different timestamps for the same file.
-    const timezones = ['UTC', 'America/New_York', 'Asia/Shanghai', 'Pacific/Kiritimati']
+    const timezones = [
+      'UTC',
+      'America/New_York',
+      'Asia/Shanghai',
+      'Pacific/Kiritimati',
+    ]
     const results = timezones.map((tz) => {
       process.env.TZ = tz
       return parseFrontmatterDate('2025-01-31').getTime()

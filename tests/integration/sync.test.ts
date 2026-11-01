@@ -84,7 +84,9 @@ describe('syncPosts', () => {
   })
 
   it('updates changed posts in place', async () => {
-    root = makeContentDir({ 'articles/alpha.mdx': mdxDoc({ title: 'Alpha' }) })
+    root = makeContentDir({
+      'articles/alpha.mdx': mdxDoc({ title: 'Alpha' }),
+    })
     await syncPosts(testDb.db, { contentRoot: root })
     const [original] = await allRows()
 
@@ -117,7 +119,9 @@ describe('syncPosts', () => {
   })
 
   it('handles file renames without leaving orphaned rows', async () => {
-    root = makeContentDir({ 'articles/old-name.mdx': mdxDoc() })
+    root = makeContentDir({
+      'articles/old-name.mdx': mdxDoc(),
+    })
     await syncPosts(testDb.db, { contentRoot: root })
 
     fs.renameSync(
@@ -131,7 +135,9 @@ describe('syncPosts', () => {
   })
 
   it('leaves the database untouched when any file is invalid', async () => {
-    root = makeContentDir({ 'articles/alpha.mdx': mdxDoc({ title: 'Alpha' }) })
+    root = makeContentDir({
+      'articles/alpha.mdx': mdxDoc({ title: 'Alpha' }),
+    })
     await syncPosts(testDb.db, { contentRoot: root })
     const before = await allRows()
 
@@ -142,7 +148,9 @@ describe('syncPosts', () => {
   })
 
   it('refuses an empty reconcile unless allowEmpty is set', async () => {
-    root = makeContentDir({ 'articles/alpha.mdx': mdxDoc() })
+    root = makeContentDir({
+      'articles/alpha.mdx': mdxDoc(),
+    })
     await syncPosts(testDb.db, { contentRoot: root })
 
     fs.rmSync(path.join(root, 'articles/alpha.mdx'))
@@ -156,7 +164,9 @@ describe('syncPosts', () => {
   })
 
   it('rejects duplicate slugs before touching the database', async () => {
-    root = makeContentDir({ 'articles/alpha.mdx': mdxDoc({ title: 'Original' }) })
+    root = makeContentDir({
+      'articles/alpha.mdx': mdxDoc({ title: 'Original' }),
+    })
     await syncPosts(testDb.db, { contentRoot: root })
 
     // second category with the same filename → same slug

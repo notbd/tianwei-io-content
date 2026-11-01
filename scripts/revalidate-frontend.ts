@@ -21,7 +21,9 @@ async function triggerRevalidation(frontend: URL, secret: string) {
       'content-type': 'application/json',
       'authorization': `Bearer ${secret}`,
     },
-    body: JSON.stringify({ tags: ['posts'] }),
+    body: JSON.stringify({
+      tags: ['posts'],
+    }),
     // a hung frontend must fail the deploy step, not stall it for minutes
     signal: AbortSignal.timeout(60_000),
   })

@@ -43,19 +43,25 @@ describe('parseMdxFile', () => {
     // Unquoted `createdAt: 2025-10-23` is parsed by js-yaml as a UTC Date —
     // this is the format the real content files use. The parser re-anchors
     // the calendar date to the content time zone.
-    root = makeContentDir({ 'articles/a.mdx': mdxDoc({ createdAt: '2025-10-23' }) })
+    root = makeContentDir({
+      'articles/a.mdx': mdxDoc({ createdAt: '2025-10-23' }),
+    })
     const record = parseMdxFile(path.join(root, 'articles/a.mdx'), root)
     expect(record.createdAt.getTime()).toBe(Date.UTC(2025, 9, 23, 4))
   })
 
   it('treats description as optional', () => {
-    root = makeContentDir({ 'articles/a.mdx': mdxDoc({ description: undefined }) })
+    root = makeContentDir({
+      'articles/a.mdx': mdxDoc({ description: undefined }),
+    })
     const record = parseMdxFile(path.join(root, 'articles/a.mdx'), root)
     expect(record.description).toBeUndefined()
   })
 
   it('treats updatedAt as optional and parses it as UTC midnight', () => {
-    root = makeContentDir({ 'articles/a.mdx': mdxDoc() })
+    root = makeContentDir({
+      'articles/a.mdx': mdxDoc(),
+    })
     expect(parseMdxFile(path.join(root, 'articles/a.mdx'), root).updatedAt).toBeUndefined()
 
     fs.writeFileSync(
@@ -75,19 +81,25 @@ describe('parseMdxFile', () => {
   })
 
   it('rejects a malformed updatedAt', () => {
-    root = makeContentDir({ 'articles/a.mdx': mdxDoc({ updatedAt: '\'01-07-2024\'' }) })
+    root = makeContentDir({
+      'articles/a.mdx': mdxDoc({ updatedAt: '\'01-07-2024\'' }),
+    })
     expect(() => parseMdxFile(path.join(root, 'articles/a.mdx'), root))
       .toThrow(/updatedAt:.*Invalid date format/)
   })
 
   it('rejects a missing title', () => {
-    root = makeContentDir({ 'articles/a.mdx': mdxDoc({ title: undefined }) })
+    root = makeContentDir({
+      'articles/a.mdx': mdxDoc({ title: undefined }),
+    })
     expect(() => parseMdxFile(path.join(root, 'articles/a.mdx'), root))
       .toThrow(/title: expected a non-empty string/)
   })
 
   it('rejects a non-boolean isPublished', () => {
-    root = makeContentDir({ 'articles/a.mdx': mdxDoc({ isPublished: 'yes' }) })
+    root = makeContentDir({
+      'articles/a.mdx': mdxDoc({ isPublished: 'yes' }),
+    })
     expect(() => parseMdxFile(path.join(root, 'articles/a.mdx'), root))
       .toThrow(/isPublished: expected a boolean/)
   })
@@ -109,7 +121,9 @@ describe('parseMdxFile', () => {
   })
 
   it('throws on structurally invalid paths', () => {
-    root = makeContentDir({ 'floating.mdx': mdxDoc() })
+    root = makeContentDir({
+      'floating.mdx': mdxDoc(),
+    })
     expect(() => parseMdxFile(path.join(root, 'floating.mdx'), root))
       .toThrow(/Invalid content path/)
   })
@@ -121,13 +135,19 @@ describe('parseMdxFile', () => {
   })
 
   it('rejects an over-long author (varchar limit)', () => {
-    root = makeContentDir({ 'articles/a.mdx': mdxDoc({ author: 'a'.repeat(120) }) })
+    root = makeContentDir({
+      'articles/a.mdx': mdxDoc({
+        author: 'a'.repeat(120),
+      }),
+    })
     expect(() => parseMdxFile(path.join(root, 'articles/a.mdx'), root))
       .toThrow(/author: exceeds 100 characters/)
   })
 
   it('rejects files containing invalid UTF-8 replacement characters', () => {
-    root = makeContentDir({ 'articles/a.mdx': mdxDoc() })
+    root = makeContentDir({
+      'articles/a.mdx': mdxDoc(),
+    })
     // simulate a Latin-1 file: write raw bytes that are invalid UTF-8
     fs.writeFileSync(path.join(root, 'articles/latin1.mdx'), Buffer.from([0x2D, 0x2D, 0x2D, 0x0A, 0xE9, 0x0A]))
     expect(() => parseMdxFile(path.join(root, 'articles/latin1.mdx'), root))
@@ -169,7 +189,9 @@ describe('parseAllPosts', () => {
     // over to March 1 BEFORE our validation can see the original text.
     // Nothing to catch here — the parsed value is a legitimate midnight-UTC
     // Date. Quote the frontmatter value to get strict validation.
-    root = makeContentDir({ 'articles/rollover.mdx': mdxDoc({ createdAt: '2024-02-30' }) })
+    root = makeContentDir({
+      'articles/rollover.mdx': mdxDoc({ createdAt: '2024-02-30' }),
+    })
     const [record] = parseAllPosts(root)
     expect(record!.createdAt.getTime()).toBe(Date.UTC(2024, 2, 1, 5))
   })
