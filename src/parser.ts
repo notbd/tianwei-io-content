@@ -11,8 +11,9 @@ import { parseFrontmatterDate } from './date.ts'
  * Validate that the given file path follows the required structure:
  *   {contentRoot}/{category}/{post_name}.mdx
  *
- * Pure check: never logs. Returns the derived category and slug,
- * or a machine-readable failure reason.
+ * Only touches the filesystem to confirm the category directory exists;
+ * never logs. Returns the derived category and slug, or a
+ * machine-readable failure reason.
  */
 export function validateMdxFileStructure(
   filePath: string,
@@ -147,7 +148,7 @@ export function parseMdxFile(
     slug: structure.slug,
     category: structure.category,
     title: data.title,
-    ...(data.description !== undefined && { description: data.description as string }),
+    ...(data.description !== undefined && { description: data.description }),
     author: data.author,
     createdAt,
     ...(updatedAt !== undefined && { updatedAt }),

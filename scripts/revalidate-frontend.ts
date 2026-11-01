@@ -3,13 +3,12 @@ import dotenv from 'dotenv'
 
 dotenv.config({ path: '.env.local', quiet: true })
 
-const FRONTEND_URL = process.env.FRONTEND_URL
-const REVALIDATION_SECRET = process.env.REVALIDATION_SECRET
-
-function assertEnv(name: string, value: string | undefined) {
+function requireEnv(name: string): string {
+  const value = process.env[name]
   if (!value) {
     throw new Error(`[env] Missing required variable: ${name}`)
   }
+  return value
 }
 
 async function triggerRevalidation(frontend: URL, secret: string) {
@@ -53,11 +52,10 @@ async function triggerRevalidation(frontend: URL, secret: string) {
 }
 
 async function main() {
-  assertEnv('FRONTEND_URL', FRONTEND_URL)
-  assertEnv('REVALIDATION_SECRET', REVALIDATION_SECRET)
+  const frontendUrl = requireEnv('FRONTEND_URL')
+  const secret = requireEnv('REVALIDATION_SECRET')
 
-  const frontendUrl = new URL(FRONTEND_URL!)
-  await triggerRevalidation(frontendUrl, REVALIDATION_SECRET!)
+  await triggerRevalidation(new URL(frontendUrl), secret)
 
   console.info('[revalidate] Completed.')
 }
