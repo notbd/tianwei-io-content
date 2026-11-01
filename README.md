@@ -83,6 +83,7 @@ After `pnpm dev:up`:
 | Script | Purpose |
 | --- | --- |
 | `pnpm dev:up` / `dev:down` / `dev:reset` | Local Postgres lifecycle + sync + watch |
+| `pnpm new-post "Title" [category]` | Scaffold a draft (`isPublished: false`, today's date in `CONTENT_TIME_ZONE`) that already passes the parser |
 | `pnpm content:sync` | One-shot local reconcile (no watcher) |
 | `pnpm sync:prod` | Production reconcile (requires `DATABASE_URL`) |
 | `pnpm db:generate` / `db:migrate` | Generate a migration from schema changes / apply pending migrations |
