@@ -19,93 +19,121 @@ The content engine of my personal website [tianwei.io](https://tianwei.io).
 
 <h2>Site Architecture</h2>
 
-- **[Frontend](https://github.com/notbd/tianwei.io)**: a Next.js application rendering content from the API with static generation and on-demand revalidation.
-- **[API Layer](https://github.com/notbd/tianwei-io-api)**: a Hono service on Cloudflare Workers serving content data from the content engine via REST endpoints.
-- **[Content Engine](https://github.com/notbd/tianwei-io-content)**: this repo, which stores, parses and syncs MDX to a remote PostgreSQL database.
+The site is split into three repos, each deployed on its own:
 
-<h2>Overview</h2>
+- **[Frontend](https://github.com/notbd/tianwei.io)**: a Next.js app that renders every page as static HTML from data it fetches through the API.
+- **[API Layer](https://github.com/notbd/tianwei-io-api)**: a read-only REST API on Cloudflare Workers that serves the published posts from Postgres.
+- **[Content Engine](https://github.com/notbd/tianwei-io-content)** (this repo): the posts themselves, written in MDX, validated and synced into Postgres on Neon.
 
-![Overview Visualization](./resources/overview-2.png)
+A post goes live in three steps:
 
-> Historical sketch from the original design; some details have since
-> evolved (category is now `varchar`, `updated_at` exists, sync is one
-> transactional reconcile in `src/`). The sections below are the current
-> source of truth.
+1. A push to `main` in this repo syncs every post into Postgres in one transaction.
+2. The same deploy calls the frontend's `/api/revalidate`.
+3. The frontend expires its cached data and renders the pages again through the API.
+
+The frontend's data cache is the only cache in the system (the API does not cache), so step 2 is the one place where new content takes effect. Three services is more than a personal site needs; I split it on purpose, to practice what only exists between services: API contracts, independent deploys and cache invalidation across repos ([tianwei.io ADR-0001](https://github.com/notbd/tianwei.io/blob/main/docs/adr/0001-three-tier-architecture.md)).
+
+<h2>How It Works</h2>
+
+This repo owns the posts, the database schema and every write; the API only reads. A sync (`src/sync.ts`) makes the `posts` table match the files in `content/`:
+
+- **Validate first**: every file is parsed before the database is touched, and one invalid file stops the run. Frontmatter follows a strict schema (a misspelled key such as `updateAt` is an error, not ignored), and the MDX body must compile with the parser the frontend uses and contain no JavaScript, which the frontend refuses to run. Errors name the file and line.
+- **One transaction**: posts are upserted by slug, so ids stay stable, and rows whose files are gone are deleted. Readers never see a half-synced table ([ADR-0001](./docs/adr/0001-transactional-reconcile-sync.md)).
+- **Guard rails**: concurrent syncs wait on a Postgres advisory lock, and a sync that finds no posts is refused unless `--allow-empty` is passed, so a bad checkout cannot empty production.
+- **Dates**: `createdAt` and `updatedAt` are calendar dates in `America/New_York`, stored as that day's midnight there, whatever the machine's time zone ([ADR-0003](./docs/adr/0003-content-time-zone.md)).
+- **Migrations**: the schema is in `drizzle/`, and the migration history is committed and applied by the deploy, never generated on the fly ([ADR-0002](./docs/adr/0002-committed-migration-history.md)).
+
+<h2>Writing a Post</h2>
+
+```shell
+pnpm new-post "My Post Title"          # creates content/articles/my-post-title.mdx
+pnpm new-post "My Post Title" notes    # in another category
+```
+
+The folder name is the category and the filename is the slug. A new post starts as a draft, with frontmatter that already passes the parser:
+
+| Key | Required | Value |
+| --- | --- | --- |
+| `title` | yes | The post title |
+| `description` | no | One sentence for the post list, the feed and link previews |
+| `createdAt` | yes | Publish date, `yyyy-MM-dd` |
+| `updatedAt` | no | Last meaningful update, `yyyy-MM-dd`, not before `createdAt` |
+| `author` | yes | Author name |
+| `isPublished` | yes | `false` keeps the post off the site |
+
+The body is Markdown plus components with string props, such as `<MdxImage src="<cloudinary-id>" width="1024" height="768" alt="..." />` for images hosted on Cloudinary. Open a pull request: CI parses every post, so a broken one fails there and not in production. Merging to `main` syncs it; it shows on the site once `isPublished` is `true`, and until then the frontend's draft preview can show it.
 
 <h2>Layout</h2>
 
 | Path | Purpose |
 | --- | --- |
-| `content/{category}/{slug}.mdx` | The content itself; folder name → category, filename → slug |
-| `src/` | Library code: parsing and validation, transactional sync, file watcher, the deploy's calls to the frontend |
-| `drizzle/` | Database schema + committed migration history (`migrations/`) |
-| `scripts/` | Thin CLI entry points (local dev, prod sync, frontend revalidation) |
-| `tests/` | Vitest suite: unit (parser, dates, path structure) + integration (migration chain, sync, watcher; all against PGlite) |
-
-<h2>Sync Semantics</h2>
-
-A sync is a single **transactional reconcile** (`src/sync.ts`):
-
-- Every `.mdx` file is parsed and validated first: any invalid file aborts the run before the database is touched. Frontmatter follows a strict schema (an unknown key such as a typo'd `updateAt` is an error, not silently dropped; titles and descriptions may not contain control characters, which would break the RSS feed), and the MDX body must compile with the parser the frontend uses and contain no JavaScript (imports, exports, `{expressions}`, expression props), which the frontend refuses to run. Errors name the file and line.
-- Inside one transaction: all parsed posts are upserted (keyed on slug, so ids stay stable) and rows whose files no longer exist are deleted.
-- Readers never observe an empty or partially-synced table; renames can't leave orphaned rows.
-- Concurrent syncs (e.g. a manual `sync:prod` during a deploy) are serialized by a transaction-scoped Postgres advisory lock, so they never interleave.
-- A parse that yields zero posts is rejected unless `--allow-empty` is passed, so a bad checkout can never wipe the production table.
-- `createdAt` frontmatter is a calendar date written as `yyyy-MM-dd` and authored in **`CONTENT_TIME_ZONE`** (`America/New_York`, see `src/config.ts`); it is stored as the UTC instant of that zone's midnight, deterministic regardless of machine timezone. Any other form, and impossible dates such as `2024-02-30`, fail the parse and abort the sync. Optional `updatedAt` follows the same rules and must not precede `createdAt`. See [ADR-0003](./docs/adr/0003-content-time-zone.md).
-
-Design records live in [`docs/adr/`](./docs/adr/).
+| `content/{category}/{slug}.mdx` | The posts |
+| `src/` | Parsing and validation, the transactional sync, the file watcher, the deploy's calls to the frontend |
+| `drizzle/` | Database schema and the committed migration history (`migrations/`) |
+| `scripts/` | Thin CLI entry points behind the `pnpm` scripts |
+| `tests/` | Unit tests, and integration tests (migrations, sync, watcher) on PGlite |
 
 <h2>Local Run</h2>
 
-Prerequisites: **Node.js 26** (see `.nvmrc`), **pnpm 10**, and **Docker**.
+Prerequisites: **Node.js 26** (see `.nvmrc`), **pnpm 10** and **Docker**.
 
 ```shell
 git clone git@github.com:notbd/tianwei-io-content.git
 cd tianwei-io-content
-cp .env.example .env.local # then fill in values
 pnpm install
+cp .env.example .env.local   # the local defaults work as-is
 
-# Start local Postgres in Docker, sync content, and watch for changes
+# Start Postgres in Docker (localhost:5431), sync every post, then re-sync on each change
 pnpm dev:up
 
-# After finishing, shut everything down cleanly
+# Stop Postgres when you are done
 pnpm dev:down
 ```
-
-After `pnpm dev:up`:
-
-- A fresh Postgres container is started and exposed at `localhost:5431`.
-- All `.mdx` files are reconciled into the `posts` table.
-- A watcher (chokidar, debounced) re-reconciles on every content change.
-
-<h2>Scripts</h2>
 
 | Script | Purpose |
 | --- | --- |
 | `pnpm dev:up` / `dev:down` / `dev:reset` | Local Postgres lifecycle + sync + watch |
-| `pnpm new-post "Title" [category]` | Scaffold a draft (`isPublished: false`, today's date in `CONTENT_TIME_ZONE`) that already passes the parser |
-| `pnpm content:sync` | One-shot local reconcile (no watcher) |
-| `pnpm sync:prod` | Production reconcile (requires `DATABASE_URL`) |
+| `pnpm new-post "Title" [category]` | Scaffold a draft (`isPublished: false`, today's date in `America/New_York`) that already passes the parser |
+| `pnpm content:sync` | One-shot local sync (no watcher) |
+| `pnpm sync:prod` | Production sync (requires `DATABASE_URL`) |
 | `pnpm db:generate` / `db:migrate` | Generate a migration from schema changes / apply pending migrations |
-| `pnpm frontend:revalidate` | Revalidate the frontend's content cache (twice, a minute apart), then check that every page renders |
+| `pnpm frontend:revalidate` | Revalidate the frontend (twice, a minute apart), then check that every page renders |
 | `pnpm lint` / `typecheck` / `test` | Quality gates (same as CI) |
 
-<h2>Env Configuration</h2>
+<h2>Configuration</h2>
 
-See `.env.example` for the full annotated list. Locally, `LOCAL_*` variables drive the Docker Postgres. In CI, the deploy workflow maps repository secrets to env: `PROD_REMOTE_DATABASE_URL` → `DATABASE_URL`, plus `FRONTEND_URL` and `REVALIDATION_SECRET`.
+| Variable | Purpose |
+| --- | --- |
+| `LOCAL_*` | The local Docker Postgres (user, password, database, ports); the defaults in `.env.example` work as-is |
+| `DATABASE_URL` | When set, the scripts use this database instead of the local one; in the deploy it comes from the `PROD_REMOTE_DATABASE_URL` secret |
+| `FRONTEND_URL`, `REVALIDATION_SECRET` | Where `pnpm frontend:revalidate` calls `/api/revalidate`, and its bearer token (must match the frontend's) |
 
-<h2>Content Sync to Prod</h2>
+`.env.example` explains each one; the deploy workflow reads them from repository secrets.
 
-Production sync is fully automated:
+<h2>Quality Gates</h2>
 
-- CI (`.github/workflows/ci.yml`) runs lint, typecheck and tests on every pull request.
-- CI also parses every committed post (`tests/unit/committed-content.test.ts`), so an invalid one fails its pull request instead of the production deploy.
-- On every push to `main` touching content or sync code, `.github/workflows/deploy-content.yml` re-runs the checks, refuses any commit that is not the head of `main` (re-running an old deploy would roll the content back; revert instead), applies pending migrations (`drizzle-kit migrate`: the committed history under `drizzle/migrations/`), performs the transactional reconcile against Neon, and runs `pnpm frontend:revalidate`: it revalidates the frontend cache, revalidates again a minute later (for any render that read the old rows mid-sync), and requests every page in the sitemap, failing unless each answers 200. Deploys are serialized via a concurrency group.
+```shell
+pnpm lint
+pnpm typecheck
+pnpm test   # unit tests; migrations, sync and watcher on PGlite
+```
 
-Result: the **remote database is always in sync** with the MDX content stored in the `main` branch of this repo.
+CI (`.github/workflows/ci.yml`) runs these on every pull request.
+
+<h2>Deploy</h2>
+
+A push to `main` that touches content or sync code runs `.github/workflows/deploy-content.yml`:
+
+1. Run lint, typecheck and tests again.
+2. Stop if the files it deploys differ from the head of `main`: re-running an old deploy would roll content back, so revert instead.
+3. Apply pending migrations (`drizzle-kit migrate`).
+4. Sync every post to Neon in one transaction.
+5. Revalidate the frontend, again a minute later (for any page that was rendering during the sync), then request every page in the sitemap and fail unless each answers 200.
+
+Deploys run one at a time, so two syncs never interleave.
 
 <h2>License</h2>
 
-Source code is licensed under <a href='./LICENSE'>AGPLv3</a>,<br>
+Source code is licensed under <a href='./LICENSE'>AGPLv3</a>.<br>
 The content is licensed under <a href='https://creativecommons.org/licenses/by-nc-sa/4.0/'>CC BY-NC-SA 4.0</a>.
 </samp>
