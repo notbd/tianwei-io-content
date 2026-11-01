@@ -198,8 +198,11 @@ describe('syncPosts', () => {
     await syncPosts(db, { contentRoot: root })
 
     // 1. the lock is the transaction's first statement, before the slug read
-    expect(queries[0]).toMatch(/^select pg_advisory_xact_lock\(\$1\)$/)
-    expect(queries[1]).toMatch(/^select "slug" from "posts"/)
+    // (transaction control is dropped: whether the driver logs begin/commit
+    // is a driver detail, not part of what is being pinned)
+    const statements = queries.filter(query => !/^(?:begin|commit|rollback)\b/i.test(query))
+    expect(statements[0]).toMatch(/^select pg_advisory_xact_lock\(\$1\)$/)
+    expect(statements[1]).toMatch(/^select "slug" from "posts"/)
     // 2. commit releases it: nothing is left held on the session
     const { rows } = await testDb.client.query(`select count(*)::int as held from pg_locks where locktype = 'advisory'`)
     expect(rows).toEqual([
