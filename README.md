@@ -56,7 +56,7 @@ Design records live in [`docs/adr/`](./docs/adr/).
 
 <h2>Local Run</h2>
 
-Prerequisites: **Node.js ≥ 22**, **pnpm 10**, and **Docker**.
+Prerequisites: **Node.js 26** (see `.nvmrc`), **pnpm 10**, and **Docker**.
 
 ```shell
 git clone git@github.com:notbd/tianwei-io-content.git

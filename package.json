@@ -3,12 +3,12 @@
   "type": "module",
   "version": "1.0.0",
   "private": true,
-  "packageManager": "pnpm@10.23.0",
+  "packageManager": "pnpm@10.34.9",
   "description": "Content engine for tianwei.io — parses MDX content and syncs it to Postgres",
   "author": "Tianwei Zhang",
   "license": "AGPL-3.0-only",
   "engines": {
-    "node": ">=22"
+    "node": "26.x"
   },
   "scripts": {
     "dev:up": "pnpm db:up && pnpm db:migrate && pnpm content:start",
