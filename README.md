@@ -2,7 +2,7 @@
 <samp>
 <h1>tianwei-io-content</h1>
 
-[![CI](https://github.com/notbd/tianwei-io-content/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/notbd/tianwei-io-content/actions/workflows/ci.yml)
+[![CI](https://github.com/notbd/tianwei-io-content/actions/workflows/ci.yml/badge.svg)](https://github.com/notbd/tianwei-io-content/actions/workflows/ci.yml)
 [![Deploy](https://github.com/notbd/tianwei-io-content/actions/workflows/deploy-content.yml/badge.svg?branch=main)](https://github.com/notbd/tianwei-io-content/actions/workflows/deploy-content.yml)
 
 The content engine of my personal website [tianwei.io](https://tianwei.io).
@@ -40,7 +40,7 @@ The content engine of my personal website [tianwei.io](https://tianwei.io).
 | `src/` | Library code: frontmatter parsing, transactional sync, file watcher |
 | `drizzle/` | Database schema + committed migration history (`migrations/`) |
 | `scripts/` | Thin CLI entry points (local dev, prod sync, frontend revalidation) |
-| `tests/` | Vitest suite — unit (parser) + integration (sync against PGlite) |
+| `tests/` | Vitest suite — unit (parser, dates, path structure) + integration (migration chain, sync, watcher; all against PGlite) |
 
 <h2>Sync Semantics</h2>
 
@@ -97,7 +97,7 @@ See `.env.example` for the full annotated list. Locally, `LOCAL_*` variables dri
 
 Production sync is fully automated:
 
-- CI (`.github/workflows/ci.yml`) runs lint, typecheck and tests on every push and pull request.
+- CI (`.github/workflows/ci.yml`) runs lint, typecheck and tests on every pull request.
 - On every push to `main` touching content or sync code, `.github/workflows/deploy-content.yml` re-runs the checks, applies pending migrations (`drizzle-kit migrate` — the committed history under `drizzle/migrations/`), performs the transactional reconcile against Neon, and revalidates the frontend cache. Deploys are serialized via a concurrency group.
 
 Result: the **remote database is always in sync** with the MDX content stored in the `main` branch of this repo.
