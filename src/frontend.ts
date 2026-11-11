@@ -25,11 +25,27 @@ const RECONCILE_ROUND_DELAY_MS = 5_000
 const PRODUCTION_FRONTEND = 'https://tianwei.io'
 
 /**
- * The production frontend, unless FRONTEND_URL points elsewhere (say
- * http://localhost:3000). The deploy workflow does not set it.
+ * The frontend `check:contract` and `frontend:revalidate` talk to: the
+ * production one, unless FRONTEND_URL points them at a stack on this
+ * machine (say http://localhost:3000). The deploy workflow does not set it.
  */
 export function frontendFromEnv(): URL {
   return new URL(readEnv('FRONTEND_URL') ?? PRODUCTION_FRONTEND)
+}
+
+/**
+ * The frontend `pnpm dev` revalidates after every sync: FRONTEND_URL, but
+ * only when its host is 127.0.0.1 or localhost. This is the one gate
+ * between the local watcher and the production frontend.
+ */
+export function localFrontendFromEnv(): URL | undefined {
+  const value = readEnv('FRONTEND_URL')
+  if (value === undefined)
+    return undefined
+  const url = new URL(value)
+  return url.hostname === '127.0.0.1' || url.hostname === 'localhost'
+    ? url
+    : undefined
 }
 
 const revalidatedPostsSchema = z.object({

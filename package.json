@@ -11,16 +11,9 @@
     "node": "26.x"
   },
   "scripts": {
-    "dev:up": "pnpm db:up && pnpm db:migrate && pnpm content:start",
-    "dev:down": "pnpm db:down",
-    "dev:reset": "pnpm db:reset && pnpm db:migrate && pnpm content:start",
-    "db:up": "docker compose --env-file .env.local up -d --wait",
-    "db:down": "docker compose --env-file .env.local down",
-    "db:reset": "docker compose --env-file .env.local down -v && pnpm db:up",
+    "dev": "node scripts/local-dev.ts",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
-    "content:start": "node scripts/local-dev.ts",
-    "content:sync": "node scripts/local-dev.ts --no-watch",
     "sync:prod": "node scripts/sync-prod.ts",
     "frontend:revalidate": "node scripts/revalidate-frontend.ts",
     "new-post": "node scripts/new-post.ts",

@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { frontendFromEnv, postBodyHash, postBodyHashesIn, reconcile, revalidateFrontend } from '../../src/frontend.ts'
+import { frontendFromEnv, localFrontendFromEnv, postBodyHash, postBodyHashesIn, reconcile, revalidateFrontend } from '../../src/frontend.ts'
 import { makeContentDir, mdxDoc } from '../helpers/fixture-content.ts'
 
 const FRONTEND = new URL('https://preview.example.test')
@@ -24,6 +24,25 @@ describe('frontendFromEnv', () => {
 
     vi.stubEnv('FRONTEND_URL', 'http://localhost:3000')
     expect(frontendFromEnv().href).toBe('http://localhost:3000/')
+  })
+})
+
+describe('localFrontendFromEnv', () => {
+  it.each([
+    ['http://127.0.0.1:3000', 'http://127.0.0.1:3000/'],
+    ['http://localhost:3000', 'http://localhost:3000/'],
+  ])('is %s when FRONTEND_URL names this machine', (value, href) => {
+    vi.stubEnv('FRONTEND_URL', value)
+    expect(localFrontendFromEnv()?.href).toBe(href)
+  })
+
+  it.each([
+    ['unset', undefined],
+    ['the production frontend', 'https://tianwei.io'],
+    ['a host that only starts with localhost', 'https://localhost.example.com'],
+  ])('is undefined when FRONTEND_URL is %s', (_name, value) => {
+    vi.stubEnv('FRONTEND_URL', value)
+    expect(localFrontendFromEnv()).toBeUndefined()
   })
 })
 

@@ -1,29 +1,23 @@
 import type { Config } from 'drizzle-kit'
-import process from 'node:process'
-import { loadLocalEnv, readEnv, requireEnv } from './src/env.ts'
+import { loadLocalEnv, readEnv } from './src/env.ts'
 
 loadLocalEnv()
 
 /**
- * Drizzle Kit configuration.
- * - DATABASE_URL, which only the process environment can set (the deploy,
- *   or one command typed on purpose; see src/env.ts), wins.
- * - Otherwise, the local Docker Postgres from .env.local.
+ * Drizzle Kit configuration. The connection is DATABASE_URL, which only
+ * the process environment can set (the deploy, or one command typed on
+ * purpose; see src/env.ts). Without it there is none: `db:generate` does
+ * not need a database, and `db:migrate` stops, asking for one.
  */
-const remoteUrl = readEnv('DATABASE_URL')
+const url = readEnv('DATABASE_URL')
 
 export default {
   schema: './drizzle/schema.ts',
   out: './drizzle/migrations',
   dialect: 'postgresql',
-  dbCredentials: remoteUrl !== undefined
-    ? { url: remoteUrl }
+  ...(url === undefined
+    ? {}
     : {
-        host: 'localhost',
-        port: Number(process.env.LOCAL_FORWARDED_DB_PORT) || 5431,
-        user: requireEnv('LOCAL_POSTGRES_USER'),
-        password: requireEnv('LOCAL_POSTGRES_PASSWORD'),
-        database: requireEnv('LOCAL_POSTGRES_DB'),
-        ssl: false,
-      },
+        dbCredentials: { url },
+      }),
 } satisfies Config

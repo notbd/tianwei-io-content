@@ -1,70 +1,93 @@
 /**
- * Local development entry point.
+ * Local development entry point: `pnpm dev`.
  *
- * Default: watch /content, then reconcile once the watcher is live and on
- * every save. A failed reconcile keeps watching: fix the content and save
- * again. If the watcher cannot start, the script closes everything and
- * fails.
+ * Builds an in-memory database from the committed migrations, serves it to
+ * the API's `wrangler dev` on 127.0.0.1:5431, then watches /content and
+ * reconciles once the watcher is live and on every save. A failed
+ * reconcile keeps watching: fix the content and save again. The database
+ * lives as long as this process, and is rebuilt from the files each time.
+ *
+ * With FRONTEND_URL naming a frontend on this machine and
+ * REVALIDATION_SECRET set, every sync also expires that frontend's cache,
+ * as the deploy does, so a reload shows the save.
  * Flags:
- *   --no-watch      run a single reconcile and exit
- *   --allow-empty   permit a reconcile that leaves no published post (every
- *                   reconcile, the watcher's too)
+ *   --allow-empty   permit a reconcile that leaves no published post
  */
 import process from 'node:process'
-import { createDb } from '../src/db.ts'
-import { loadLocalEnv } from '../src/env.ts'
+import { loadLocalEnv, readEnv } from '../src/env.ts'
 import { messageOf } from '../src/errors.ts'
-import { syncPosts } from '../src/sync.ts'
+import { localFrontendFromEnv, revalidateFrontend } from '../src/frontend.ts'
+import { openLocalDb, serveNeonHttp } from '../src/localDb.ts'
 import { startWatching } from '../src/watcher.ts'
 
 loadLocalEnv()
 
-const allowEmpty = process.argv.includes('--allow-empty')
-const { db, pool } = createDb()
+// Fixed, and not read from the environment: the API's .dev.vars.example
+// names this port. Taken means another `pnpm dev` runs; this one fails.
+const PORT = 5431
 
-if (process.argv.includes('--no-watch')) {
-  try {
-    const result = await syncPosts(db, { allowEmpty })
-    console.info(`[local-dev] Synced: ${result.upserted} upserted, ${result.deleted} deleted`)
-  }
-  catch (err) {
-    console.error('[local-dev] Sync failed (database unchanged):', messageOf(err))
-    process.exitCode = 1
-  }
-  finally {
-    await pool.end()
-  }
+const { db, client } = await openLocalDb()
+const server = await serveNeonHttp(client, PORT, (err) => {
+  // Not shutdown(): that path exits 0. Nothing here outlives the process
+  // (no lock, no files, the database is in memory), so it can just end.
+  console.error('[dev] The database endpoint failed:', messageOf(err))
+  process.exit(1)
+}).catch(async (err: unknown) => {
+  console.error(`[dev] Could not serve the database on 127.0.0.1:${PORT}:`, messageOf(err))
+  await client.close()
+  process.exit(1)
+})
+console.info(`[dev] Database ready. The API reads it with DATABASE_URL=postgresql://local@127.0.0.1:${PORT}/local`)
+
+const frontend = localFrontendFromEnv()
+const secret = readEnv('REVALIDATION_SECRET')
+function revalidateLocalFrontend() {
+  if (frontend === undefined || secret === undefined)
+    return
+  revalidateFrontend(frontend, secret).then(
+    () => console.info(`[dev] Revalidated ${frontend.origin}`),
+    (err: unknown) => console.error(`[dev] Could not revalidate ${frontend.origin}:`, messageOf(err)),
+  )
 }
-else {
-  let stop: () => Promise<void>
+if (frontend !== undefined && secret !== undefined)
+  console.info(`[dev] Every sync revalidates ${frontend.origin}`)
+
+async function release() {
+  // the API's driver keeps its connections open; do not wait for them
+  server.close()
+  server.closeAllConnections()
+  await client.close()
+}
+
+let stop: () => Promise<void>
+try {
+  ({ stop } = await startWatching(db, release, {
+    allowEmpty: process.argv.includes('--allow-empty'),
+    onSync: revalidateLocalFrontend,
+  }))
+}
+catch (err) {
+  console.error('[dev] Could not watch the content (watcher and database closed):', messageOf(err))
+  process.exit(1)
+}
+
+// Idempotent: a second Ctrl+C while the first shutdown drains an
+// in-flight reconcile must not close the database twice.
+let shuttingDown = false
+async function shutdown() {
+  if (shuttingDown)
+    return
+  shuttingDown = true
+  console.info('\n[dev] Shutting down...')
   try {
-    ({ stop } = await startWatching(db, async () => pool.end(), { allowEmpty }))
+    await stop()
   }
   catch (err) {
-    console.error('[local-dev] Could not watch the content (watcher and database closed):', messageOf(err))
+    console.error('[dev] Error during shutdown:', err)
     process.exit(1)
   }
-
-  // Idempotent: a second Ctrl+C while the first shutdown drains an
-  // in-flight reconcile must not re-enter pool.end() (which rejects on
-  // repeat calls and would crash the process with an unhandled rejection).
-  let shuttingDown = false
-  const shutdown = async () => {
-    if (shuttingDown)
-      return
-    shuttingDown = true
-    console.info('\n[local-dev] Shutting down...')
-    try {
-      await stop()
-    }
-    catch (err) {
-      console.error('[local-dev] Error during shutdown:', err)
-      process.exit(1)
-    }
-    console.info('[local-dev] Done. (Run `pnpm dev:down` to stop the DB container if needed.)')
-    process.exit(0)
-  }
-
-  process.on('SIGINT', () => void shutdown())
-  process.on('SIGTERM', () => void shutdown())
+  process.exit(0)
 }
+
+process.on('SIGINT', () => void shutdown())
+process.on('SIGTERM', () => void shutdown())
