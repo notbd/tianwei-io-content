@@ -75,7 +75,7 @@ describe('revalidateFrontend', () => {
       /could not read the API, so it expired nothing.*\(502\)/,
     ],
     [
-      'a 207 from a frontend that still warms after expiring',
+      'a 207 from a 2026-07 frontend, which expired first and checked after',
       () => Response.json({ success: false, error: 'api down' }, { status: 207 }),
       /Failed \(207\)/,
     ],

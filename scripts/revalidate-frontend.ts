@@ -1,6 +1,6 @@
 /**
  * The content deploy's last step: makes the frontend serve what was just
- * synced, then proves every page renders.
+ * synced, then proves it does.
  *
  * 1. Revalidate: the frontend reads the content through the API and, only
  *    if every read worked, expires its content cache.
