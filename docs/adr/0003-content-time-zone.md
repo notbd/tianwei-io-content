@@ -43,7 +43,8 @@ One explicit model, one constant per side:
   re-sync** (stored instants are derived from the zone at parse time).
 - Rollout order matters once: rows stored under the old UTC-midnight
   encoding display one day early in ET, so the content re-sync must
-  deploy before (or with) the frontend's ET display change.
+  deploy before (or with) the frontend's ET display change. (Done in the
+  2026-07 release.)
 - If per-visitor timezone display is ever wanted, storage needs no
   change: instants are unambiguous; only the display constant would
   become a user preference.

@@ -1,6 +1,6 @@
 # ADR-0001: Transactional reconcile instead of clear-then-reinsert
 
-- **Status**: Accepted (2026-07); writer lock added 2026-10
+- **Status**: Accepted (2026-07); writer lock added 2026-10; empty guard counts published posts since 2026-11
 - **Repos affected**: tianwei-io-content (writer), tianwei-io-api (reader)
 
 ## Context
@@ -36,17 +36,21 @@ All writes go through a single entry point, `src/sync.ts#syncPosts`:
   waits for the first to commit and then diffs against the committed
   rows. Transaction-scoped rather than session-scoped: commit or rollback
   always releases it, and it works through Neon's transaction-mode pooler.
-- **Empty-parse guard.** A run that would delete every post refuses to
-  execute unless explicitly flagged (`--allow-empty`), so a bad checkout
-  or wrong path can never wipe production.
+- **Empty-site guard.** A run that would leave no published post (no
+  files, or only drafts) refuses to execute unless explicitly flagged
+  (`--allow-empty`), so a bad checkout or wrong path can never empty
+  the site. The flag does not make an empty site valid elsewhere: the
+  frontend refuses to build and the API's deploy check fails without a
+  published post.
 - **The watcher collapses event bursts** into one debounced reconcile,
   serialized by a running/pending latch; overlapping writes are
   structurally impossible.
 
 ## Consequences
 
-- Deploys are atomic from the reader's perspective; the frontend's cache
-  warming never fetches a half-synced catalog.
+- Deploys are atomic from the reader's perspective; the API read the
+  frontend makes before it expires its cache never sees a half-synced
+  catalog.
 - Renames, deletions and edits all reduce to "reconcile disk vs table";
   there is no per-event mutation logic left to get wrong.
 - A full reconcile on every change is O(total posts), which is trivially
