@@ -2,7 +2,8 @@
  * The content deploy's last step: makes the frontend serve what was just
  * synced, then proves every page renders.
  *
- * 1. Revalidate: the frontend expires its content cache and re-fetches it.
+ * 1. Revalidate: the frontend reads the content through the API and, only
+ *    if every read worked, expires its content cache.
  * 2. A minute later, revalidate again. A page that was rendering while the
  *    sync committed may have read the old rows and stored its result after
  *    the first expiry, where it would stay until the next sync. Frontend

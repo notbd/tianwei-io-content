@@ -45,10 +45,15 @@ export function frontendFromEnv(): Frontend {
   }
 }
 
+const revalidatedPosts = z.object({
+  revalidated: z.array(z.string()),
+})
+
 /**
- * POST /api/revalidate: the frontend expires the `posts` tag and re-fetches
- * the content through the API. A 207 (expired, but the re-fetch failed) is
- * a failure too.
+ * POST /api/revalidate: the frontend reads the content through the API
+ * first and expires the `posts` tag only if every read worked. Anything but
+ * a 200 whose `revalidated` lists `posts` fails the deploy; a 502 means the
+ * read failed and nothing was expired.
  */
 export async function revalidateFrontend(frontend: Frontend, secret: string): Promise<unknown> {
   const endpoint = new URL('/api/revalidate', frontend.url)
@@ -66,21 +71,23 @@ export async function revalidateFrontend(frontend: Frontend, secret: string): Pr
   })
   const rawBody = await response.text()
 
-  if (!response.ok)
+  if (response.status === 502)
+    throw new Error(`[revalidate] The frontend could not read the API, so it expired nothing and still serves the previous content (502): ${rawBody}`)
+  if (response.status !== 200)
     throw new Error(`[revalidate] Failed (${response.status}): ${rawBody}`)
 
-  let payload: { success?: boolean }
+  let payload: unknown
   try {
-    payload = JSON.parse(rawBody) as typeof payload
+    payload = JSON.parse(rawBody)
   }
   catch {
-    // e.g. a proxy/CDN HTML error page with a 2xx status
+    // e.g. a proxy/CDN HTML error page with a 200 status
     throw new Error(`[revalidate] Non-JSON response (${response.status}) from ${endpoint}: ${rawBody.slice(0, 300)}`)
   }
 
-  // response.ok is true for a 207, so the payload decides
-  if (payload.success !== true)
-    throw new Error(`[revalidate] Partial failure (${response.status}): ${JSON.stringify(payload)}`)
+  const parsed = revalidatedPosts.safeParse(payload)
+  if (!parsed.success || !parsed.data.revalidated.includes('posts'))
+    throw new Error(`[revalidate] 200 without "posts" in revalidated: ${rawBody.slice(0, 300)}`)
 
   return payload
 }

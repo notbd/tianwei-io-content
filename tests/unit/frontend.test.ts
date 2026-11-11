@@ -45,13 +45,11 @@ describe('revalidateFrontend', () => {
     const fetchMock = stubFetch(() => Response.json({
       success: true,
       revalidated: ['posts'],
-      warmed: ['posts'],
     }))
 
     expect(await revalidateFrontend(FRONTEND, 's3cret')).toEqual({
       success: true,
       revalidated: ['posts'],
-      warmed: ['posts'],
     })
     const [url, init] = fetchMock.mock.calls[0]!
     expect(String(url)).toBe('https://preview.example.test/api/revalidate')
@@ -69,12 +67,22 @@ describe('revalidateFrontend', () => {
       /Failed \(401\)/,
     ],
     [
-      'a 207 whose warm failed',
-      () => Response.json({ success: false, error: 'api down' }, { status: 207 }),
-      /Partial failure \(207\)/,
+      'a 502, where the frontend read the API, failed, and expired nothing',
+      () => Response.json({ error: 'Bad Gateway', message: 'api down' }, { status: 502 }),
+      /could not read the API, so it expired nothing.*\(502\)/,
     ],
     [
-      'a 2xx HTML page',
+      'a 207 from a frontend that still warms after expiring',
+      () => Response.json({ success: false, error: 'api down' }, { status: 207 }),
+      /Failed \(207\)/,
+    ],
+    [
+      'a 200 whose revalidated does not list posts',
+      () => Response.json({ success: true, revalidated: [] }),
+      /200 without "posts" in revalidated/,
+    ],
+    [
+      'a 200 HTML page',
       () => new Response('<html>proxy</html>', { status: 200 }),
       /Non-JSON response \(200\)/,
     ],
