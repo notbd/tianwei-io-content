@@ -97,14 +97,62 @@ describe('parseMdxFile', () => {
       .toThrow(/createdAt:.*Invalid date format/)
   })
 
-  it('rejects control characters in the title and description (they would break the RSS feed)', () => {
+  it.each([
+    ['a control character', '"Tab\\tis fine, vertical tab\\v is not"'],
+    ['U+FFFE', '"Bad\\uFFFEtitle"'],
+    ['U+FFFF', '"Bad\\uFFFFtitle"'],
+    ['a lone surrogate', '"Half \\uD83D of an emoji"'],
+    ['NUL', '"A\\0B"'],
+  ])('rejects %s in the title and description (it would break the RSS feed)', (_name, text) => {
     root = makeContentDir({
       // YAML escapes: js-yaml already refuses raw control characters in the file
-      'articles/a.mdx': mdxDoc({ title: '"Tab\\tis fine, vertical tab\\v is not"', description: '"Form\\ffeed"' }),
+      'articles/a.mdx': mdxDoc({ title: text, description: text }),
     })
     const run = () => parseMdxFile(path.join(root, 'articles/a.mdx'), root)
-    expect(run).toThrow(/title: contains a control character/)
-    expect(run).toThrow(/description: contains a control character/)
+    expect(run).toThrow(/title: contains a character XML 1.0 forbids/)
+    expect(run).toThrow(/description: contains a character XML 1.0 forbids/)
+  })
+
+  it('accepts emoji and CJK in the title (outside the BMP is still XML text)', () => {
+    root = makeContentDir({
+      'articles/a.mdx': mdxDoc({ title: '"标题 🚀 café"' }),
+    })
+    expect(parseMdxFile(path.join(root, 'articles/a.mdx'), root).title).toBe('标题 🚀 café')
+  })
+
+  it('rejects NUL in the author and the body (the database cannot store it)', () => {
+    root = makeContentDir({
+      'articles/a.mdx': mdxDoc({ author: '"A\\0B"', body: 'Before\0after.\n' }),
+    })
+    const run = () => parseMdxFile(path.join(root, 'articles/a.mdx'), root)
+    expect(run).toThrow(/author: contains a NUL character/)
+    expect(run).toThrow(/body: contains a NUL character/)
+  })
+
+  it.each([
+    ['---js', '---js'],
+    ['---javascript', '---javascript'],
+    ['---JS', '---JS'],
+    ['--- js (spaces)', '--- js '],
+    ['---js with CRLF', '---js\r'],
+  ])('refuses frontmatter that is not YAML (%s) without running it', (_name, fence) => {
+    const marker = '__tioFrontmatterRan'
+    root = makeContentDir({
+      'articles/a.mdx': `${fence}\n{ title: (globalThis.${marker} = true, "t") }\n---\n\nBody.\n`,
+    })
+    expect(() => parseMdxFile(path.join(root, 'articles/a.mdx'), root))
+      .toThrow(/must open with a bare --- line \(frontmatter is YAML only\).*at line 1/)
+    expect(marker in globalThis).toBe(false)
+  })
+
+  it('accepts a file with CRLF line endings', () => {
+    root = makeContentDir({
+      'articles/a.mdx': mdxDoc({ body: 'Line one.\n\nLine two.\n' }).replaceAll('\n', '\r\n'),
+    })
+    expect(parseMdxFile(path.join(root, 'articles/a.mdx'), root)).toMatchObject({
+      title: 'A Test Post',
+      content: '\r\nLine one.\r\n\r\nLine two.\r\n',
+    })
   })
 
   it('rejects an unknown key instead of silently dropping it', () => {

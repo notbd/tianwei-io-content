@@ -72,12 +72,23 @@ export function validateMdxFileStructure(
  * see what the author wrote. CORE_SCHEMA has no timestamp type (and no JS
  * types, so load() is safe), which leaves dates as the authored strings
  * for parseFrontmatterDate to check.
+ *
+ * gray-matter also picks a parser from the text after the opening `---`,
+ * and its javascript engine (`---js`, `---javascript`) evals the
+ * frontmatter. FRONTMATTER_OPEN refuses those files before gray-matter
+ * runs; the engine below makes sure nothing could ever fall back to eval.
  */
 const FRONTMATTER_OPTIONS = {
   engines: {
     yaml: (input: string): object => yaml.load(input, { schema: yaml.CORE_SCHEMA }),
+    javascript: (): object => {
+      throw new Error('frontmatter must be YAML')
+    },
   },
 }
+
+/** A bare `---` line: frontmatter is YAML, with no language after the fence. */
+const FRONTMATTER_OPEN = /^---[ \t]*\r?\n/
 
 /** A 'yyyy-MM-dd' calendar date, anchored to CONTENT_TIME_ZONE midnight (ADR-0003). */
 function calendarDate(value: unknown, ctx: z.RefinementCtx): Date {
@@ -90,26 +101,33 @@ function calendarDate(value: unknown, ctx: z.RefinementCtx): Date {
   }
 }
 
-// XML 1.0 forbids the C0 controls other than tab, LF and CR: one pasted
-// into a title or description would make the whole RSS feed unreadable.
-function hasControlCharacter(text: string): boolean {
-  return [...text].some((char) => {
-    const code = char.charCodeAt(0)
-    return code < 0x20 && code !== 0x09 && code !== 0x0A && code !== 0x0D
-  })
+// One code point outside XML 1.0's Char range (a pasted control character,
+// U+FFFE, a lone surrogate) in a title or description makes the whole RSS
+// feed unreadable. The `u` flag matches by code point, so emoji pass.
+const NON_XML_CHARACTER = /[^\t\n\r\u0020-\uD7FF\uE000-\uFFFD\u{10000}-\u{10FFFF}]/u
+
+function isXmlText(text: string): boolean {
+  return !NON_XML_CHARACTER.test(text)
+}
+
+// Postgres text and varchar cannot store NUL: one would fail the whole sync
+// transaction at write time instead of naming the field here.
+function hasNul(text: string): boolean {
+  return text.includes('\0')
 }
 
 const NON_EMPTY = 'expected a non-empty string'
-const NO_CONTROL_CHARACTERS = 'contains a control character (invalid in the RSS feed)'
+const XML_TEXT_ONLY = 'contains a character XML 1.0 forbids (it would break the RSS feed)'
+const NO_NUL = 'contains a NUL character (the database cannot store it)'
 
 /**
  * The authoring contract for frontmatter. Strict: an unknown key (say a
  * typo'd `updateAt`) fails the parse instead of being silently dropped.
  */
 const frontmatterSchema = z.strictObject({
-  title: z.string(NON_EMPTY).refine(text => text.trim() !== '', NON_EMPTY).refine(text => !hasControlCharacter(text), NO_CONTROL_CHARACTERS),
-  description: z.string('expected a string when present').refine(text => !hasControlCharacter(text), NO_CONTROL_CHARACTERS).optional(),
-  author: z.string(NON_EMPTY).refine(text => text.trim() !== '', NON_EMPTY).max(100, 'exceeds 100 characters (varchar limit)'),
+  title: z.string(NON_EMPTY).refine(text => text.trim() !== '', NON_EMPTY).refine(isXmlText, XML_TEXT_ONLY),
+  description: z.string('expected a string when present').refine(isXmlText, XML_TEXT_ONLY).optional(),
+  author: z.string(NON_EMPTY).refine(text => text.trim() !== '', NON_EMPTY).refine(text => !hasNul(text), NO_NUL).max(100, 'exceeds 100 characters (varchar limit)'),
   // optional() lets an absent key reach the date parser, which names the problem
   createdAt: z.unknown().optional().transform(calendarDate),
   updatedAt: z.unknown().optional().transform((value, ctx) => value == null
@@ -192,6 +210,11 @@ export function parseMdxFile(
   if (raw.includes('�'))
     throw new Error(`[parser] "${filePath}" contains invalid UTF-8 (found U+FFFD replacement characters)`)
 
+  if (!FRONTMATTER_OPEN.test(raw)) {
+    const firstLine = raw.split(/\r?\n/, 1)[0] ?? ''
+    throw new Error(`[parser] "${filePath}" must open with a bare --- line (frontmatter is YAML only), found ${JSON.stringify(firstLine)} at line 1`)
+  }
+
   let data: unknown
   let content: string
   try {
@@ -209,6 +232,9 @@ export function parseMdxFile(
     ...(frontmatter.success
       ? []
       : frontmatter.error.issues.map(issue => `${issue.path.join('.') || 'frontmatter'}: ${issue.message}`)),
+    ...(hasNul(content)
+      ? [`body: ${NO_NUL}`]
+      : []),
     ...mdxBodyErrors(content, linesBeforeBody),
   ]
   if (!frontmatter.success || errors.length > 0)
