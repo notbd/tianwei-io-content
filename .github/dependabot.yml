@@ -5,6 +5,7 @@ updates:
     target-branch: dev
     schedule:
       interval: monthly
+    # skip releases younger than a week; security updates are not held back
     cooldown:
       default-days: 7
     groups:
@@ -15,6 +16,7 @@ updates:
     target-branch: dev
     schedule:
       interval: monthly
+    # skip releases younger than a week; security updates are not held back
     cooldown:
       default-days: 7
     groups:
