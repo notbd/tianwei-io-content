@@ -11,21 +11,13 @@
  * 3. Request every page in the sitemap; anything but a 200 fails the deploy,
  *    so a page that does not render is reported at once.
  */
-import process from 'node:process'
 import { setTimeout as sleep } from 'node:timers/promises'
-import dotenv from 'dotenv'
+import { loadLocalEnv, requireEnv } from '../src/env.ts'
 import { checkEveryPage, revalidateFrontend } from '../src/frontend.ts'
 
-dotenv.config({ path: '.env.local', quiet: true })
+loadLocalEnv()
 
 const SECOND_PASS_DELAY_MS = 60_000
-
-function requireEnv(name: string): string {
-  const value = process.env[name]
-  if (!value)
-    throw new Error(`[env] Missing required variable: ${name}`)
-  return value
-}
 
 const frontendUrl = new URL(requireEnv('FRONTEND_URL'))
 const secret = requireEnv('REVALIDATION_SECRET')

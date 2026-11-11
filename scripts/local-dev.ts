@@ -7,12 +7,12 @@
  *   --allow-empty   permit a reconcile that deletes every post
  */
 import process from 'node:process'
-import dotenv from 'dotenv'
 import { createDb } from '../src/db.ts'
+import { loadLocalEnv } from '../src/env.ts'
 import { syncPosts } from '../src/sync.ts'
 import { watchContent } from '../src/watcher.ts'
 
-dotenv.config({ path: '.env.local', quiet: true })
+loadLocalEnv()
 
 const watch = !process.argv.includes('--no-watch')
 const { db, pool } = createDb()

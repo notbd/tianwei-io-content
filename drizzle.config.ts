@@ -1,22 +1,16 @@
 import type { Config } from 'drizzle-kit'
 import process from 'node:process'
-import dotenv from 'dotenv'
+import { loadLocalEnv, requireEnv } from './src/env.ts'
 
-dotenv.config({ path: '.env.local', quiet: true })
+loadLocalEnv()
 
 /**
  * Drizzle Kit configuration.
- * - If DATABASE_URL is set (CI/CD or production), use it directly.
- * - Otherwise, fall back to local Docker Postgres credentials.
+ * - DATABASE_URL, which only the process environment can set (the deploy,
+ *   or one command typed on purpose; see src/env.ts), wins.
+ * - Otherwise, the local Docker Postgres from .env.local.
  */
 const remoteUrl = process.env.DATABASE_URL
-
-if (remoteUrl === undefined && process.env.LOCAL_POSTGRES_USER === undefined) {
-  throw new Error(
-    '[drizzle.config] Neither DATABASE_URL nor LOCAL_POSTGRES_* is set: '
-    + 'copy .env.example to .env.local for local development.',
-  )
-}
 
 export default {
   schema: './drizzle/schema.ts',
@@ -27,9 +21,9 @@ export default {
     : {
         host: 'localhost',
         port: Number(process.env.LOCAL_FORWARDED_DB_PORT) || 5431,
-        user: process.env.LOCAL_POSTGRES_USER!,
-        password: process.env.LOCAL_POSTGRES_PASSWORD!,
-        database: process.env.LOCAL_POSTGRES_DB!,
+        user: requireEnv('LOCAL_POSTGRES_USER'),
+        password: requireEnv('LOCAL_POSTGRES_PASSWORD'),
+        database: requireEnv('LOCAL_POSTGRES_DB'),
         ssl: false,
       },
 } satisfies Config
