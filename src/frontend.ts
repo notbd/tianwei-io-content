@@ -32,7 +32,7 @@ export function frontendFromEnv(): URL {
   return new URL(readEnv('FRONTEND_URL') ?? PRODUCTION_FRONTEND)
 }
 
-const revalidatedPosts = z.object({
+const revalidatedPostsSchema = z.object({
   revalidated: z.array(z.string()),
 })
 
@@ -71,7 +71,7 @@ export async function revalidateFrontend(frontend: URL, secret: string): Promise
     throw new Error(`[revalidate] Non-JSON response (${response.status}) from ${endpoint.href}: ${rawBody.slice(0, 300)}`)
   }
 
-  const parsed = revalidatedPosts.safeParse(payload)
+  const parsed = revalidatedPostsSchema.safeParse(payload)
   if (!parsed.success || !parsed.data.revalidated.includes('posts'))
     throw new Error(`[revalidate] 200 without "posts" in revalidated: ${rawBody.slice(0, 300)}`)
 

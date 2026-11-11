@@ -15,7 +15,7 @@ const CONTRACT_PATH = '/contract.json'
 
 // Only the keys this engine knows: z.object drops the rest, so the
 // frontend may add keys without breaking older content deploys.
-const contractShape = z.object({
+const contractSchema = z.object({
   timeZone: z.string(),
   mdx: z.object({
     components: z.record(z.string(), z.object({
@@ -34,7 +34,7 @@ export type Contract = {
 
 /** Read a /contract.json document into the rules the parser applies. */
 export function readContract(json: unknown): Contract {
-  const { timeZone, mdx } = contractShape.parse(json)
+  const { timeZone, mdx } = contractSchema.parse(json)
   return {
     timeZone,
     components: new Map(Object.entries(mdx.components).map(([name, { attributes, children }]) => [
