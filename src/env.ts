@@ -1,4 +1,5 @@
 import fs from 'node:fs'
+import path from 'node:path'
 import process from 'node:process'
 import dotenv from 'dotenv'
 
@@ -11,14 +12,23 @@ import dotenv from 'dotenv'
  * secret, or `DATABASE_URL=... pnpm sync:prod` typed for one command. A
  * file that sets it is refused, because the migration and the sync read
  * this file: `pnpm dev:up` would migrate that database and the watcher
- * would write every save to it.
+ * would write every save to it. A .env next to it is refused the same way:
+ * nothing here loads it, but drizzle-kit does by itself.
  *
  * Synchronous on purpose: drizzle-kit loads drizzle.config.ts through a
  * require hook, where top-level await is not available.
  */
 export function loadLocalEnv(file = '.env.local'): void {
+  refuseDatabaseUrl(path.join(path.dirname(file), '.env'))
+  const values = refuseDatabaseUrl(file)
+  if (values !== undefined)
+    dotenv.populate(process.env, values)
+}
+
+/** The file's variables, or undefined without the file; throws if it sets DATABASE_URL. */
+function refuseDatabaseUrl(file: string) {
   if (!fs.existsSync(file))
-    return
+    return undefined
   const values = dotenv.parse(fs.readFileSync(file))
   if ('DATABASE_URL' in values) {
     throw new Error(
@@ -27,7 +37,7 @@ export function loadLocalEnv(file = '.env.local'): void {
       + 'instead: DATABASE_URL=... pnpm sync:prod',
     )
   }
-  dotenv.populate(process.env, values)
+  return values
 }
 
 /** A variable's value; set but empty counts as unset. */

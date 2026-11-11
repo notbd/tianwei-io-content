@@ -28,7 +28,7 @@ This repo owns the posts, the database schema and every write; the API only read
 - **Checked against the frontend**: `pnpm check:contract` holds every post, drafts included, to the frontend's [`/contract.json`](https://tianwei.io/contract.json): the components a post may use and their attributes, and the time zone dates are anchored to. Pull requests run it, and the deploy runs it before writing anything ([tianwei.io ADR-0006](https://github.com/notbd/tianwei.io/blob/main/docs/adr/0006-cross-repo-releases.md)).
 - **One transaction**: posts are upserted by slug, so ids stay stable, and rows whose files are gone are deleted. Readers never see a half-synced table ([ADR-0001](./docs/adr/0001-transactional-reconcile-sync.md)).
 - **Guard rails**: concurrent syncs wait on a Postgres advisory lock, and a sync that would leave no published post is refused unless `--allow-empty` is passed, so a bad checkout cannot empty production. `--allow-empty` only lets the sync through: the frontend still refuses to build, and the API's deploy check still fails, without a published post.
-- **No production database by accident**: `DATABASE_URL` is read only from the process environment. `drizzle-kit` and every script in `scripts/` but `new-post` read `.env.local`, and they refuse one that sets it, since `pnpm dev:up` would otherwise migrate that database and write every save to it.
+- **No production database by accident**: `DATABASE_URL` is read only from the process environment. `drizzle-kit` and every script in `scripts/` but `new-post` read `.env.local`, and they refuse one that sets it (or a `.env` that does, which `drizzle-kit` loads by itself), since `pnpm dev:up` would otherwise migrate that database and write every save to it.
 - **Dates**: `createdAt` and `updatedAt` are calendar dates in `America/New_York`, stored as that day's midnight there, whatever the machine's time zone ([ADR-0003](./docs/adr/0003-content-time-zone.md)).
 - **Migrations**: the schema is in `drizzle/`, and the migration history is committed and applied by the deploy, never generated on the fly ([ADR-0002](./docs/adr/0002-committed-migration-history.md)).
 
@@ -103,7 +103,7 @@ pnpm dev:down
 | Variable | Purpose |
 | --- | --- |
 | `LOCAL_*` | The local Docker Postgres (user, password, database, ports); the defaults in `.env.example` work as-is |
-| `DATABASE_URL` | A remote database for one command, from the process environment only (`DATABASE_URL=... pnpm sync:prod`); a `.env.local` that sets it is refused. Unset, the scripts use the local database, except `pnpm sync:prod`, which stops |
+| `DATABASE_URL` | A remote database for one command, from the process environment only (`DATABASE_URL=... pnpm sync:prod`); a `.env.local` or `.env` that sets it is refused. Unset, the scripts use the local database, except `pnpm sync:prod`, which stops |
 | `REVALIDATION_SECRET` | Bearer token for the frontend's `/api/revalidate` (must match the frontend's) |
 | `FRONTEND_URL`, `FRONTEND_EXTRA_HEADERS` (local rehearsal only) | Point `pnpm check:contract` and `pnpm frontend:revalidate` at another frontend, such as `http://localhost:3000`, and add headers to every request to it; unset, they use `https://tianwei.io` |
 
