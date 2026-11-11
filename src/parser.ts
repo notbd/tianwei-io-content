@@ -89,7 +89,8 @@ export function validateMdxFileStructure(
 const FRONTMATTER_OPTIONS = {
   engines: {
     yaml: (input: string): object => {
-      // js-yaml 3 types load() as any; anything but a mapping is no frontmatter
+      // js-yaml 3 types load() as any; a scalar is no frontmatter (a list
+      // passes here and fails the schema)
       const data: unknown = yaml.load(input, { schema: yaml.CORE_SCHEMA })
       if (typeof data !== 'object' || data === null)
         throw new Error('frontmatter must be a YAML mapping of keys to values')
@@ -164,8 +165,11 @@ const frontmatterSchema = z.strictObject({
 // The frontend compiles post bodies with @mdx-js/mdx and the same rules
 // (tianwei.io src/lib/mdx.tsx). Checking them here keeps a body it cannot
 // render out of the database: otherwise the sync succeeds and that post's
-// page fails in production. Both sides must parse the same syntax: when the
-// frontend adds a remark plugin that extends it, add the plugin here too.
+// page fails in production. The sync's own parse stops a syntax error and
+// JavaScript; which components and attributes a body may use needs the
+// frontend's contract, which `pnpm check:contract` brings. Both sides must
+// parse the same syntax: when the frontend adds a remark plugin that
+// extends it, add the plugin here too.
 const mdxParser = createProcessor({
   remarkPlugins: [remarkGfm],
 })

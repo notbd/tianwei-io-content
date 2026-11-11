@@ -19,21 +19,29 @@ import dotenv from 'dotenv'
  * require hook, where top-level await is not available.
  */
 export function loadLocalEnv(file = '.env.local'): void {
-  refuseDatabaseUrl(path.join(path.dirname(file), '.env'))
-  const values = refuseDatabaseUrl(file)
+  parseEnvFile(
+    path.join(path.dirname(file), '.env'),
+    'drizzle-kit loads that file by itself, so pnpm dev:up would migrate that database.',
+  )
+  const values = parseEnvFile(
+    file,
+    'The migration and the sync read that file, so pnpm dev:up would migrate that database and write every save to it.',
+  )
   if (values !== undefined)
     dotenv.populate(process.env, values)
 }
 
-/** The file's variables, or undefined without the file; throws if it sets DATABASE_URL. */
-function refuseDatabaseUrl(file: string) {
+/**
+ * The file's variables, or undefined without the file. Throws if it sets
+ * DATABASE_URL; `risk` says what would happen otherwise, for the message.
+ */
+function parseEnvFile(file: string, risk: string) {
   if (!fs.existsSync(file))
     return undefined
   const values = dotenv.parse(fs.readFileSync(file))
   if ('DATABASE_URL' in values) {
     throw new Error(
-      `[env] ${file} sets DATABASE_URL. The migration and the sync read that file, so pnpm dev:up would migrate `
-      + 'that database and write every save to it. Delete the line and pass the URL for one command '
+      `[env] ${file} sets DATABASE_URL. ${risk} Delete the line and pass the URL for one command `
       + 'instead: DATABASE_URL=... pnpm sync:prod',
     )
   }

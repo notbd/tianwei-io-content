@@ -40,7 +40,7 @@ describe('loadLocalEnv', () => {
   it('refuses a .env next to it that sets DATABASE_URL, which drizzle-kit would load by itself', () => {
     fs.writeFileSync(path.join(dir, '.env'), 'DATABASE_URL=postgresql://x:y@127.0.0.1:9/z\n')
     const file = envFile('TIO_TEST_FROM_FILE=file\n')
-    expect(() => loadLocalEnv(file)).toThrow(/\.env sets DATABASE_URL/)
+    expect(() => loadLocalEnv(file)).toThrow(/\.env sets DATABASE_URL\. drizzle-kit loads that file by itself/)
     expect(process.env.TIO_TEST_FROM_FILE).toBeUndefined()
   })
 
