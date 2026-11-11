@@ -8,11 +8,6 @@ import type { posts } from '../drizzle/schema.ts'
  */
 export type ContentRecord = Omit<typeof posts.$inferSelect, 'id'>
 
-/** Result of a structure validation on a content file path. */
-export type StructureResult
-  = | { ok: true, category: string, slug: string }
-    | { ok: false, reason: string }
-
 /** Summary of a reconcile run against the database. */
 export interface SyncResult {
   /** Number of records parsed from disk and upserted */

@@ -1,5 +1,5 @@
 import type { Root } from 'mdast'
-import type { ContentRecord, StructureResult } from './types.ts'
+import type { ContentRecord } from './types.ts'
 import fs from 'node:fs'
 import path from 'node:path'
 import { createProcessor } from '@mdx-js/mdx'
@@ -12,6 +12,11 @@ import { AUTHOR_MAX_LENGTH, CATEGORY_MAX_LENGTH, SLUG_MAX_LENGTH } from '../driz
 import { CONTENT_ROOT } from './config.ts'
 import { parseFrontmatterDate } from './date.ts'
 import { messageOf } from './errors.ts'
+
+/** Result of a structure validation on a content file path. */
+export type StructureResult
+  = | { ok: true, category: string, slug: string }
+    | { ok: false, reason: string }
 
 /**
  * Validate that the given file path follows the required structure:
@@ -382,7 +387,7 @@ export function parseAllPosts(contentRoot: string = CONTENT_ROOT, components?: C
 }
 
 /** Throw if two records share a slug (e.g. same filename in two categories). */
-export function assertUniqueSlugs(records: ContentRecord[]): void {
+function assertUniqueSlugs(records: ContentRecord[]): void {
   const seen = new Map<string, string>()
   const duplicates: string[] = []
 
