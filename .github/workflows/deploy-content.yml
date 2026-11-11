@@ -77,6 +77,12 @@ jobs:
             exit 1
           fi
 
+      # Prove the frontend can render every post before anything is written:
+      # a post it cannot render, or a frontend with no contract to give,
+      # stops the deploy here with the database untouched.
+      - name: Check posts against the frontend's contract
+        run: pnpm check:contract --require
+
       - name: Apply migrations to Neon
         run: pnpm db:migrate
         env:
@@ -87,8 +93,11 @@ jobs:
         env:
           DATABASE_URL: ${{ secrets.PROD_REMOTE_DATABASE_URL }}
 
-      - name: Revalidate frontend cache
+      # Revalidate (the frontend reads the API first and expires nothing if
+      # that fails), revalidate again a minute later, then reconcile: every
+      # post page must report the hash of the body just synced. The frontend
+      # is https://tianwei.io, a constant in src/frontend.ts, not a secret.
+      - name: Revalidate the frontend and reconcile it with the content
         run: pnpm frontend:revalidate
         env:
-          FRONTEND_URL: ${{ secrets.FRONTEND_URL }}
           REVALIDATION_SECRET: ${{ secrets.REVALIDATION_SECRET }}
