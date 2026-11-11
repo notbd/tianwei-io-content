@@ -1,7 +1,10 @@
 /**
  * Local development entry point.
  *
- * Default: full reconcile, then watch /content for changes.
+ * Default: watch /content, then reconcile once the watcher is live and on
+ * every save. A failed reconcile keeps watching: fix the content and save
+ * again. If the watcher cannot start, the script closes everything and
+ * fails.
  * Flags:
  *   --no-watch      run a single reconcile and exit
  *   --allow-empty   permit a reconcile that leaves no published post (every
@@ -10,29 +13,37 @@
 import process from 'node:process'
 import { createDb } from '../src/db.ts'
 import { loadLocalEnv } from '../src/env.ts'
+import { messageOf } from '../src/errors.ts'
 import { syncPosts } from '../src/sync.ts'
-import { watchContent } from '../src/watcher.ts'
+import { startWatching } from '../src/watcher.ts'
 
 loadLocalEnv()
 
-const watch = !process.argv.includes('--no-watch')
 const allowEmpty = process.argv.includes('--allow-empty')
 const { db, pool } = createDb()
 
-try {
-  const result = await syncPosts(db, { allowEmpty })
-  console.info(`[local-dev] Initial sync: ${result.upserted} upserted, ${result.deleted} deleted`)
-}
-catch (err) {
-  console.error('[local-dev] Initial sync failed:', (err as Error).message)
-  if (watch)
-    console.info('[local-dev] Continuing to watch: fix the content and save again.')
-  else
+if (process.argv.includes('--no-watch')) {
+  try {
+    const result = await syncPosts(db, { allowEmpty })
+    console.info(`[local-dev] Synced: ${result.upserted} upserted, ${result.deleted} deleted`)
+  }
+  catch (err) {
+    console.error('[local-dev] Sync failed (database unchanged):', messageOf(err))
     process.exitCode = 1
+  }
+  finally {
+    await pool.end()
+  }
 }
-
-if (watch) {
-  const watcher = watchContent(db, { allowEmpty })
+else {
+  let stop: () => Promise<void>
+  try {
+    ({ stop } = await startWatching(db, () => pool.end(), { allowEmpty }))
+  }
+  catch (err) {
+    console.error('[local-dev] Could not watch the content (watcher and database closed):', messageOf(err))
+    process.exit(1)
+  }
 
   // Idempotent: a second Ctrl+C while the first shutdown drains an
   // in-flight reconcile must not re-enter pool.end() (which rejects on
@@ -44,8 +55,7 @@ if (watch) {
     shuttingDown = true
     console.info('\n[local-dev] Shutting down...')
     try {
-      await watcher.close()
-      await pool.end()
+      await stop()
     }
     catch (err) {
       console.error('[local-dev] Error during shutdown:', err)
@@ -57,7 +67,4 @@ if (watch) {
 
   process.on('SIGINT', () => void shutdown())
   process.on('SIGTERM', () => void shutdown())
-}
-else {
-  await pool.end()
 }
