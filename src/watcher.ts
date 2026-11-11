@@ -6,6 +6,8 @@ import { syncPosts } from './sync.ts'
 
 export interface WatchOptions {
   contentRoot?: string
+  /** Passed to every reconcile; the entry point's --allow-empty (see SyncOptions) */
+  allowEmpty?: boolean
   /** Quiet window after the last file event before a reconcile runs */
   debounceMs?: number
   /** Called after every completed reconcile (used by tests and logging) */
@@ -49,7 +51,7 @@ export function watchContent(db: Db, options: WatchOptions = {}): ContentWatcher
     }
     running = true
     try {
-      const result = await syncPosts(db, { contentRoot })
+      const result = await syncPosts(db, { contentRoot, allowEmpty: options.allowEmpty ?? false })
       console.info(`[watcher] Reconciled: ${result.upserted} upserted, ${result.deleted} deleted`)
       options.onSync?.(result)
     }

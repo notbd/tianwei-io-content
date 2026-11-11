@@ -30,9 +30,11 @@ export interface SyncOptions {
   /** Directory to parse; defaults to the repo's /content */
   contentRoot?: string
   /**
-   * Allow a sync that would delete every row (i.e. the content
-   * directory parsed to zero records). Off by default so a bad
-   * checkout or wrong path can never wipe the production table.
+   * Allow a sync that leaves no published post (the content directory
+   * parsed to no records, or to drafts only). Off by default so a bad
+   * checkout or wrong path can never empty the site. It does not make the
+   * rest of the system accept an empty site: the frontend refuses to build
+   * and the API's deploy check fails without a published post.
    */
   allowEmpty?: boolean
 }
@@ -60,10 +62,10 @@ export async function syncPosts(db: Db, options: SyncOptions = {}): Promise<Sync
 
   const records = parseAllPosts(contentRoot)
 
-  if (records.length === 0 && !options.allowEmpty) {
+  if (!records.some(record => record.isPublished) && !options.allowEmpty) {
     throw new Error(
-      `[sync] Refusing to reconcile: no content found under "${contentRoot}". `
-      + `This would delete every post. Pass allowEmpty (--allow-empty) if intentional.`,
+      `[sync] Refusing to reconcile: no published post under "${contentRoot}" (${records.length} draft(s)). `
+      + `This would leave the site with no posts. Pass allowEmpty (--allow-empty) if intentional.`,
     )
   }
 

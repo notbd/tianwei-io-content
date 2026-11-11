@@ -4,7 +4,8 @@
  * Default: full reconcile, then watch /content for changes.
  * Flags:
  *   --no-watch      run a single reconcile and exit
- *   --allow-empty   permit a reconcile that deletes every post
+ *   --allow-empty   permit a reconcile that leaves no published post (every
+ *                   reconcile, the watcher's too)
  */
 import process from 'node:process'
 import { createDb } from '../src/db.ts'
@@ -15,12 +16,11 @@ import { watchContent } from '../src/watcher.ts'
 loadLocalEnv()
 
 const watch = !process.argv.includes('--no-watch')
+const allowEmpty = process.argv.includes('--allow-empty')
 const { db, pool } = createDb()
 
 try {
-  const result = await syncPosts(db, {
-    allowEmpty: process.argv.includes('--allow-empty'),
-  })
+  const result = await syncPosts(db, { allowEmpty })
   console.info(`[local-dev] Initial sync: ${result.upserted} upserted, ${result.deleted} deleted`)
 }
 catch (err) {
@@ -32,7 +32,7 @@ catch (err) {
 }
 
 if (watch) {
-  const watcher = watchContent(db)
+  const watcher = watchContent(db, { allowEmpty })
 
   // Idempotent: a second Ctrl+C while the first shutdown drains an
   // in-flight reconcile must not re-enter pool.end() (which rejects on

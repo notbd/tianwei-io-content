@@ -33,10 +33,11 @@ function nextSync(onSyncEvents: (() => void)[]): Promise<void> {
   })
 }
 
-function makeWatcher(contentRoot: string) {
+function makeWatcher(contentRoot: string, options: { allowEmpty?: boolean } = {}) {
   const resolvers: (() => void)[] = []
   const errors: Error[] = []
   const instance = watchContent(testDb.db, {
+    ...options,
     contentRoot,
     debounceMs: 100,
     onSync: () => resolvers.splice(0).forEach(resolve => resolve()),
@@ -118,5 +119,21 @@ describe('watchContent', () => {
     fs.writeFileSync(path.join(root, 'articles/broken.mdx'), mdxDoc({ title: 'Fixed' }))
     await synced
     expect(await slugsInDb()).toEqual(['broken', 'good'])
+  }, 15_000)
+
+  it('applies the entry point\'s allowEmpty to every reconcile', async () => {
+    root = makeContentDir({
+      'articles/only.mdx': mdxDoc(),
+    })
+    const { instance, resolvers, errors } = makeWatcher(root, { allowEmpty: true })
+    watcher = instance
+    await instance.ready
+
+    // unpublishing the last post is refused without allowEmpty
+    const synced = nextSync(resolvers)
+    fs.writeFileSync(path.join(root, 'articles/only.mdx'), mdxDoc({ isPublished: false }))
+    await synced
+    expect(errors).toEqual([])
+    expect(await slugsInDb()).toEqual(['only'])
   }, 15_000)
 })

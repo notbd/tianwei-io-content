@@ -165,6 +165,25 @@ describe('syncPosts', () => {
     expect(await allRows()).toHaveLength(0)
   })
 
+  it('refuses a reconcile that leaves only drafts unless allowEmpty is set', async () => {
+    root = makeContentDir({
+      'articles/alpha.mdx': mdxDoc(),
+    })
+    await syncPosts(testDb.db, { contentRoot: root })
+
+    // unpublishing the last post empties the site as surely as deleting it
+    fs.writeFileSync(path.join(root, 'articles/alpha.mdx'), mdxDoc({ isPublished: false }))
+    await expect(syncPosts(testDb.db, { contentRoot: root })).rejects.toThrow('no published post under')
+    expect(await allRows()).toMatchObject([
+      { slug: 'alpha', isPublished: true },
+    ])
+
+    await syncPosts(testDb.db, { contentRoot: root, allowEmpty: true })
+    expect(await allRows()).toMatchObject([
+      { slug: 'alpha', isPublished: false },
+    ])
+  })
+
   it('rejects duplicate slugs before touching the database', async () => {
     root = makeContentDir({
       'articles/alpha.mdx': mdxDoc({ title: 'Original' }),
