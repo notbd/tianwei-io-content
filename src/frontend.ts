@@ -25,7 +25,7 @@ const RECONCILE_ROUND_DELAY_MS = 5_000
 const PRODUCTION_FRONTEND = 'https://tianwei.io'
 
 /** Where the frontend is, and the headers every request to it carries. */
-export interface Frontend {
+export type Frontend = {
   url: URL
   headers: Record<string, string>
 }
@@ -130,14 +130,14 @@ export function postBodyHashIn(html: string): string | undefined {
 }
 
 /** One request of a reconcile round and what its answer must be. */
-interface Check {
+type Check = {
   path: string
   status: 200 | 404
   /** the body hash a post page must report */
   hash?: string | undefined
 }
 
-export interface ReconcileOptions {
+export type ReconcileOptions = {
   /** Content to compare against; defaults to the repo's content/ */
   contentRoot?: string
   /** Pause before a round is tried again */
@@ -284,7 +284,7 @@ async function runCheck(frontend: Frontend, check: Check, log: (line: string) =>
   return undefined
 }
 
-interface Fetched {
+type Fetched = {
   status: number
   body: ArrayBuffer
 }

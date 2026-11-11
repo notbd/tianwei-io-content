@@ -4,7 +4,7 @@ import chokidar from 'chokidar'
 import { CONTENT_ROOT } from './config.ts'
 import { syncPosts } from './sync.ts'
 
-export interface WatchOptions {
+export type WatchOptions = {
   contentRoot?: string
   /** Passed to every reconcile; the entry point's --allow-empty (see SyncOptions) */
   allowEmpty?: boolean
@@ -16,7 +16,7 @@ export interface WatchOptions {
   onError?: (error: Error) => void
 }
 
-export interface ContentWatcher {
+export type ContentWatcher = {
   /**
    * Resolves once chokidar's initial scan is done and events are live; the
    * first reconcile starts then. Rejects if the scan fails: close() the

@@ -173,7 +173,7 @@ const JSX_ELEMENTS = new Set(['mdxJsxFlowElement', 'mdxJsxTextElement'])
  */
 export type ComponentRules = ReadonlyMap<string, { attributes: z.ZodType, children: boolean }>
 
-interface MdxNode {
+type MdxNode = {
   type: string
   /** a JSX element's name; null for a fragment */
   name?: string | null

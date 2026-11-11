@@ -10,5 +10,7 @@ export default antfu({
         allow: ['warn', 'error', 'info'],
       },
     ],
+    // one way to declare object types (unions already need `type`), as in the web repo
+    'ts/consistent-type-definitions': ['error', 'type'],
   },
 })

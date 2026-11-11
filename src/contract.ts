@@ -28,7 +28,7 @@ const contractShape = z.object({
   }),
 })
 
-export interface Contract {
+export type Contract = {
   timeZone: string
   components: ComponentRules
 }

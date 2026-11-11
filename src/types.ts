@@ -9,7 +9,7 @@ import type { posts } from '../drizzle/schema.ts'
 export type ContentRecord = Omit<typeof posts.$inferSelect, 'id'>
 
 /** Summary of a reconcile run against the database. */
-export interface SyncResult {
+export type SyncResult = {
   /** Number of records parsed from disk and upserted */
   upserted: number
   /** Number of stale rows removed from the database */

@@ -26,7 +26,7 @@ const TAKE_INCOMING = Object.fromEntries(
   ]),
 )
 
-export interface SyncOptions {
+export type SyncOptions = {
   /** Directory to parse; defaults to the repo's /content */
   contentRoot?: string
   /**
