@@ -1,13 +1,22 @@
 /**
  * The content deploy's calls to the frontend: expire its content cache, then
- * prove every page renders. Kept out of the script so they can be tested.
+ * prove it serves what was synced. Kept out of the script so they can be
+ * tested.
  */
+import { createHash } from 'node:crypto'
 import process from 'node:process'
+import { setTimeout as sleep } from 'node:timers/promises'
 import { z } from 'zod'
+import { CONTENT_ROOT } from './config.ts'
+import { messageOf } from './errors.ts'
+import { parseAllPosts } from './parser.ts'
 
-// a hung frontend must fail the deploy step, not stall it for minutes
+// a hung frontend must fail the deploy step, not stall it for minutes; the
+// timeout covers reading the whole body too
 export const REQUEST_TIMEOUT_MS = 60_000
-const PAGE_CHECK_CONCURRENCY = 4
+const CHECK_CONCURRENCY = 4
+const RECONCILE_ROUNDS = 3
+const RECONCILE_ROUND_DELAY_MS = 5_000
 
 /**
  * The production frontend. A public value, so a constant rather than a
@@ -92,50 +101,215 @@ export async function revalidateFrontend(frontend: Frontend, secret: string): Pr
   return payload
 }
 
+/** The meta tag on each /posts/<slug> page: the SHA-256 of the body it rendered. */
+export const POST_BODY_HASH_META = 'post-body-sha256'
+
+/** SHA-256 of a post body as UTF-8, untrimmed: what the frontend reports in that tag. */
+export function postBodyHash(body: string): string {
+  return createHash('sha256').update(body).digest('hex')
+}
+
+const META_TAG = /<meta\b[^>]*>/gi
+const ATTRIBUTE = /([^\s"'<>/=]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'<>=`]+))/g
+
 /**
- * Requests every page the sitemap lists and fails unless each answers 200.
- * Right after a revalidation this renders each page with the new content,
- * so a post the frontend cannot render (an MDX component it does not have,
- * a prop it rejects) turns the deploy red at once. Visitors see the error
- * too until it is fixed (the synced content has no older version to fall
- * back on); the check makes sure the author hears of it first.
+ * The content of the page's <meta name="post-body-sha256">, wherever the
+ * tag is in the HTML (not only in <head>); undefined without one. Reads
+ * that tag's attributes, never just any 64-digit hex on the page.
  */
-export async function checkEveryPage(frontend: Frontend): Promise<string[]> {
-  const sitemap = await fetch(new URL('/sitemap.xml', frontend.url), {
+export function postBodyHashIn(html: string): string | undefined {
+  for (const [tag] of html.matchAll(META_TAG)) {
+    const attributes = new Map(Array.from(tag.matchAll(ATTRIBUTE), ([, name = '', double, single, bare]) => [
+      name.toLowerCase(),
+      double ?? single ?? bare ?? '',
+    ]))
+    if (attributes.get('name') === POST_BODY_HASH_META)
+      return attributes.get('content')
+  }
+  return undefined
+}
+
+/** One request of a reconcile round and what its answer must be. */
+interface Check {
+  path: string
+  status: 200 | 404
+  /** the body hash a post page must report */
+  hash?: string | undefined
+}
+
+export interface ReconcileOptions {
+  /** Content to compare against; defaults to the repo's content/ */
+  contentRoot?: string
+  /** Pause before a round is tried again */
+  roundDelayMs?: number
+  /** Where the per-request lines go (status, x-vercel-cache, age) */
+  log?: (line: string) => void
+}
+
+/**
+ * Prove the frontend serves what was just synced, after the revalidation.
+ * The content is parsed once, on entry, and every round compares against
+ * that snapshot:
+ * - the sitemap's /posts/<slug> pages are exactly the published posts;
+ * - every page the sitemap lists answers 200, and each post page's
+ *   post-body-sha256 equals the hash of the body synced here (a page that
+ *   failed to re-render after the expiry keeps serving its previous
+ *   version with a 200, which only the hash tells apart);
+ * - /feed.xml and every published post's /opengraph-image answer 200;
+ * - every draft's /posts/<slug> answers 404.
+ * Every body is read to the end within the request's timeout. A round
+ * collects every problem and ends when its last request has; with any
+ * problem it is tried again after a pause, three rounds in all.
+ */
+export async function reconcile(frontend: Frontend, options: ReconcileOptions = {}): Promise<number> {
+  const records = parseAllPosts(options.contentRoot ?? CONTENT_ROOT)
+  const published = new Map(records
+    .filter(record => record.isPublished)
+    .map(record => [
+      record.slug,
+      postBodyHash(record.content),
+    ]))
+  const drafts = records.filter(record => !record.isPublished).map(record => record.slug)
+  const roundDelayMs = options.roundDelayMs ?? RECONCILE_ROUND_DELAY_MS
+  const log = options.log ?? console.info
+
+  let failures: string[] = []
+  for (let round = 1; round <= RECONCILE_ROUNDS; round++) {
+    if (round > 1) {
+      log(`[reconcile] Round ${round - 1} found ${failures.length} problem(s):\n  - ${failures.join('\n  - ')}`)
+      log(`[reconcile] Trying again in ${roundDelayMs / 1000} s`)
+      await sleep(roundDelayMs)
+    }
+    const result = await reconcileRound(frontend, published, drafts, log)
+    if (result.failures.length === 0)
+      return result.checked
+    failures = result.failures
+  }
+  throw new Error(`[reconcile] The frontend does not serve what was synced (${RECONCILE_ROUNDS} rounds):\n  - ${failures.join('\n  - ')}`)
+}
+
+async function reconcileRound(
+  frontend: Frontend,
+  published: ReadonlyMap<string, string>,
+  drafts: readonly string[],
+  log: (line: string) => void,
+): Promise<{ checked: number, failures: string[] }> {
+  const sitemapUrl = new URL('/sitemap.xml', frontend.url)
+  let sitemap: string
+  try {
+    const page = await get(sitemapUrl, frontend, log)
+    if (page.status !== 200) {
+      return {
+        checked: 1,
+        failures: [`${sitemapUrl} answered ${page.status}`],
+      }
+    }
+    sitemap = new TextDecoder().decode(page.body)
+  }
+  catch (err) {
+    return {
+      checked: 1,
+      failures: [
+        requestFailure(sitemapUrl, err),
+      ],
+    }
+  }
+
+  // the sitemap holds canonical URLs; check the same paths on this frontend
+  const paths = Array.from(sitemap.matchAll(/<loc>([^<]+)<\/loc>/g), ([, loc = '']) => new URL(loc).pathname)
+  if (paths.length === 0) {
+    return {
+      checked: 1,
+      failures: [`${sitemapUrl} lists no pages`],
+    }
+  }
+
+  const failures: string[] = []
+  const listedPosts = new Set(paths.flatMap(path => postSlugOf(path) ?? []))
+  for (const slug of published.keys()) {
+    if (!listedPosts.has(slug))
+      failures.push(`${sitemapUrl} does not list /posts/${slug}, a published post`)
+  }
+  for (const slug of listedPosts) {
+    if (!published.has(slug))
+      failures.push(`${sitemapUrl} lists /posts/${slug}, which is not a published post`)
+  }
+
+  const checks: Check[] = [
+    ...paths.map((path): Check => ({
+      path,
+      status: 200,
+      hash: published.get(postSlugOf(path) ?? ''),
+    })),
+    { path: '/feed.xml', status: 200 },
+    ...Array.from(published.keys(), (slug): Check => ({ path: `/posts/${slug}/opengraph-image`, status: 200 })),
+    ...drafts.map((slug): Check => ({ path: `/posts/${slug}`, status: 404 })),
+  ]
+  const queue = [...checks]
+  const worker = async () => {
+    for (let check = queue.shift(); check !== undefined; check = queue.shift()) {
+      const failure = await runCheck(frontend, check, log)
+      if (failure !== undefined)
+        failures.push(failure)
+    }
+  }
+  await Promise.all(Array.from({ length: CHECK_CONCURRENCY }, worker))
+
+  return { checked: checks.length + 1, failures }
+}
+
+/** What is wrong with one check's answer, if anything. Never throws. */
+async function runCheck(frontend: Frontend, check: Check, log: (line: string) => void): Promise<string | undefined> {
+  const url = new URL(check.path, frontend.url)
+  let page: Fetched
+  try {
+    page = await get(url, frontend, log)
+  }
+  catch (err) {
+    return requestFailure(url, err)
+  }
+
+  if (page.status !== check.status) {
+    if (check.status === 404)
+      return `${url} answered ${page.status}, but it is a draft and must answer 404`
+    return page.status >= 500
+      ? `${url} answered ${page.status}: the page failed to render`
+      : `${url} answered ${page.status}, expected 200`
+  }
+  if (check.hash !== undefined) {
+    const shown = postBodyHashIn(new TextDecoder().decode(page.body))
+    if (shown !== check.hash)
+      return `${url} still shows a previous version: expected ${POST_BODY_HASH_META} ${check.hash}, the page has ${shown ?? 'no such meta tag'}`
+  }
+  return undefined
+}
+
+interface Fetched {
+  status: number
+  body: ArrayBuffer
+}
+
+/** GET with the frontend's headers, reading the whole body within the timeout, logged. */
+async function get(url: URL, frontend: Frontend, log: (line: string) => void): Promise<Fetched> {
+  const response = await fetch(url, {
     headers: frontend.headers,
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   })
-  if (!sitemap.ok)
-    throw new Error(`[check] /sitemap.xml answered ${sitemap.status}`)
+  const body = await response.arrayBuffer()
+  log(`[reconcile] ${response.status} ${url.pathname} x-vercel-cache=${response.headers.get('x-vercel-cache') ?? '-'} age=${response.headers.get('age') ?? '-'}`)
+  return { status: response.status, body }
+}
 
-  // the sitemap holds canonical URLs; check the same paths on this frontend
-  const paths = [
-    ...(await sitemap.text()).matchAll(/<loc>([^<]+)<\/loc>/g),
-  ]
-    .map(([, loc]) => new URL(loc!).pathname)
-  if (paths.length === 0)
-    throw new Error('[check] /sitemap.xml lists no pages')
+function requestFailure(url: URL, err: unknown): string {
+  return err instanceof Error && err.name === 'TimeoutError'
+    ? `${url} timed out after ${REQUEST_TIMEOUT_MS / 1000} s`
+    : `${url} failed: ${messageOf(err)}`
+}
 
-  const failures: string[] = []
-  const queue = [...paths]
-  const worker = async () => {
-    for (let path = queue.shift(); path !== undefined; path = queue.shift()) {
-      try {
-        const page = await fetch(new URL(path, frontend.url), {
-          headers: frontend.headers,
-          signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-        })
-        if (page.status !== 200)
-          failures.push(`${path} answered ${page.status}`)
-      }
-      catch (err) {
-        failures.push(`${path} failed: ${(err as Error).message}`)
-      }
-    }
-  }
-  await Promise.all(Array.from({ length: PAGE_CHECK_CONCURRENCY }, worker))
-
-  if (failures.length > 0)
-    throw new Error(`[check] ${failures.length} of ${paths.length} pages did not render:\n  - ${failures.join('\n  - ')}`)
-  return paths
+/** The slug of a /posts/<slug> path; undefined for any other path. */
+function postSlugOf(path: string): string | undefined {
+  const slug = /^\/posts\/([^/]+)$/.exec(path)?.[1]
+  return slug === undefined
+    ? undefined
+    : decodeURIComponent(slug)
 }

@@ -9,12 +9,14 @@
  *    the first expiry, where it would stay until the next sync. Frontend
  *    renders give up after about 30 s (its fetcher's deadlines), so by now
  *    any such write has landed, and this expiry removes it.
- * 3. Request every page in the sitemap; anything but a 200 fails the deploy,
- *    so a page that does not render is reported at once.
+ * 3. Reconcile: every page answers, and each post page reports the hash of
+ *    the body synced here (src/frontend.ts reconcile). A page that failed
+ *    to render keeps serving its previous version with a 200, so only the
+ *    hash shows that a change did not go live.
  */
 import { setTimeout as sleep } from 'node:timers/promises'
 import { loadLocalEnv, requireEnv } from '../src/env.ts'
-import { checkEveryPage, frontendFromEnv, revalidateFrontend } from '../src/frontend.ts'
+import { frontendFromEnv, reconcile, revalidateFrontend } from '../src/frontend.ts'
 
 loadLocalEnv()
 
@@ -30,5 +32,5 @@ console.info(`[revalidate] Second pass in ${SECOND_PASS_DELAY_MS / 1000} s, afte
 await sleep(SECOND_PASS_DELAY_MS)
 console.info('[revalidate] Success:', await revalidateFrontend(frontend, secret))
 
-const pages = await checkEveryPage(frontend)
-console.info(`[check] All ${pages.length} pages answered 200`)
+const checked = await reconcile(frontend)
+console.info(`[reconcile] All ${checked} requests answered as expected; every post page shows the synced body`)
