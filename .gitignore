@@ -8,9 +8,6 @@
 # dependencies
 /node_modules
 
-# production
-/build
-
 # Ignore all .env files except `.env.example`
 .env*
 !.env.example
