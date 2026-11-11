@@ -8,6 +8,7 @@ import matter from 'gray-matter'
 import yaml from 'js-yaml'
 import remarkGfm from 'remark-gfm'
 import { z } from 'zod'
+import { AUTHOR_MAX_LENGTH, CATEGORY_MAX_LENGTH, SLUG_MAX_LENGTH } from '../drizzle/schema.ts'
 import { CONTENT_ROOT } from './config.ts'
 import { parseFrontmatterDate } from './date.ts'
 
@@ -50,19 +51,19 @@ export function validateMdxFileStructure(
     return { ok: false, reason: `invalid file type "${rawFilename}": expected an .mdx file` }
 
   // slugify can yield '' (e.g. symbol-only or non-Latin names), and the DB
-  // columns are varchar(200)/varchar(100); catch both here, in the parse
-  // phase, so a bad name can never abort the sync transaction midway.
+  // columns are varchars; catch both here, in the parse phase, so a bad
+  // name can never abort the sync transaction midway.
   const category = slugify(rawCategory)
   const slug = slugify(path.basename(rawFilename, path.extname(rawFilename)))
 
   if (category.length === 0)
     return { ok: false, reason: `category "${rawCategory}" slugifies to an empty string` }
-  if (category.length > 100)
-    return { ok: false, reason: `category "${rawCategory}" slugifies to ${category.length} chars (max 100)` }
+  if (category.length > CATEGORY_MAX_LENGTH)
+    return { ok: false, reason: `category "${rawCategory}" slugifies to ${category.length} chars (max ${CATEGORY_MAX_LENGTH})` }
   if (slug.length === 0)
     return { ok: false, reason: `filename "${rawFilename}" slugifies to an empty slug` }
-  if (slug.length > 200)
-    return { ok: false, reason: `filename "${rawFilename}" slugifies to a ${slug.length}-char slug (max 200)` }
+  if (slug.length > SLUG_MAX_LENGTH)
+    return { ok: false, reason: `filename "${rawFilename}" slugifies to a ${slug.length}-char slug (max ${SLUG_MAX_LENGTH})` }
 
   return { ok: true, category, slug }
 }
@@ -128,7 +129,7 @@ const NO_NUL = 'contains a NUL character (the database cannot store it)'
 const frontmatterSchema = z.strictObject({
   title: z.string(NON_EMPTY).refine(text => text.trim() !== '', NON_EMPTY).refine(isXmlText, XML_TEXT_ONLY),
   description: z.string('expected a string when present').refine(isXmlText, XML_TEXT_ONLY).optional(),
-  author: z.string(NON_EMPTY).refine(text => text.trim() !== '', NON_EMPTY).refine(text => !hasNul(text), NO_NUL).max(100, 'exceeds 100 characters (varchar limit)'),
+  author: z.string(NON_EMPTY).refine(text => text.trim() !== '', NON_EMPTY).refine(text => !hasNul(text), NO_NUL).max(AUTHOR_MAX_LENGTH, `exceeds ${AUTHOR_MAX_LENGTH} characters (varchar limit)`),
   // optional() lets an absent key reach the date parser, which names the problem
   createdAt: z.unknown().optional().transform(calendarDate),
   updatedAt: z.unknown().optional().transform((value, ctx) => value == null

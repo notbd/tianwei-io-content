@@ -1,4 +1,5 @@
 import slugify from '@sindresorhus/slugify'
+import { SLUG_MAX_LENGTH } from '../drizzle/schema.ts'
 import { CONTENT_TIME_ZONE } from './config.ts'
 
 /** Today's calendar date where posts are authored, as frontmatter wants it ('yyyy-MM-dd'). */
@@ -18,9 +19,8 @@ export function newPostFile(title: string, author: string, today: string, takenS
   const slug = slugify(title)
   if (slug === '')
     throw new Error(`[new-post] "${title}" has no letters or digits to build a slug from`)
-  // the slug column is varchar(200), which the parser enforces too
-  if (slug.length > 200)
-    throw new Error(`[new-post] "${title}" makes a ${slug.length}-character slug (max 200); shorten the title`)
+  if (slug.length > SLUG_MAX_LENGTH)
+    throw new Error(`[new-post] "${title}" makes a ${slug.length}-character slug (max ${SLUG_MAX_LENGTH}); shorten the title`)
   if (takenSlugs.has(slug))
     throw new Error(`[new-post] a post with the slug "${slug}" already exists (slugs are unique across categories, drafts included); choose another title`)
 
