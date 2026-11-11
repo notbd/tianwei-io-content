@@ -4,7 +4,8 @@
  * Writes content/<category>/<slug>.mdx (category defaults to "articles")
  * with today's date in CONTENT_TIME_ZONE and isPublished: false, taking the
  * author from the newest existing post, then parses it with the sync's own
- * parser so the file is valid from the start.
+ * parser so the file is valid from the start. A slug any existing post
+ * already has, in any category, is refused before anything is written.
  */
 import fs from 'node:fs'
 import path from 'node:path'
@@ -24,8 +25,14 @@ if (category !== path.basename(category) || category.startsWith('.')) {
   process.exit(2)
 }
 
-const newest = parseAllPosts().toSorted((a, b) => b.createdAt.getTime() - a.createdAt.getTime())[0]
-const { slug, text } = newPostFile(title.trim(), newest?.author ?? '', todayInContentTimeZone())
+const posts = parseAllPosts()
+const newest = posts.toSorted((a, b) => b.createdAt.getTime() - a.createdAt.getTime())[0]
+const { slug, text } = newPostFile(
+  title.trim(),
+  newest?.author ?? '',
+  todayInContentTimeZone(),
+  new Set(posts.map(post => post.slug)),
+)
 
 const filePath = path.join(CONTENT_ROOT, category, `${slug}.mdx`)
 if (fs.existsSync(filePath)) {
