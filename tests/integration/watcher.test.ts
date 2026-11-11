@@ -5,19 +5,19 @@ import path from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { posts } from '../../drizzle/schema.ts'
+import { openLocalDb } from '../../src/localDb.ts'
 import { startWatching, watchContent } from '../../src/watcher.ts'
 import { makeContentDir, mdxDoc } from '../helpers/fixture-content.ts'
-import { createTestDb } from '../helpers/test-db.ts'
 
 // Exercises the debounce + running/pending latch against a real (in-memory)
 // database and a real chokidar watcher on a tmpdir.
 
 let root = ''
-let testDb: Awaited<ReturnType<typeof createTestDb>>
+let testDb: Awaited<ReturnType<typeof openLocalDb>>
 let watcher: ReturnType<typeof watchContent> | undefined
 
 beforeEach(async () => {
-  testDb = await createTestDb()
+  testDb = await openLocalDb()
 })
 
 afterEach(async () => {

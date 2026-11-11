@@ -4,15 +4,15 @@ import { drizzle } from 'drizzle-orm/pglite'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import * as schema from '../../drizzle/schema.ts'
 import { posts } from '../../drizzle/schema.ts'
+import { openLocalDb } from '../../src/localDb.ts'
 import { syncPosts } from '../../src/sync.ts'
 import { makeContentDir, mdxDoc } from '../helpers/fixture-content.ts'
-import { createTestDb } from '../helpers/test-db.ts'
 
 let root = '' // '' = not created; guards afterEach when makeContentDir throws
-let testDb: Awaited<ReturnType<typeof createTestDb>>
+let testDb: Awaited<ReturnType<typeof openLocalDb>>
 
 beforeEach(async () => {
-  testDb = await createTestDb()
+  testDb = await openLocalDb()
 })
 
 afterEach(async () => {
