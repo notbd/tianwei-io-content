@@ -12,6 +12,7 @@
   },
   "scripts": {
     "dev": "node scripts/local-dev.ts",
+    "rehearse": "node scripts/rehearse.ts",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "sync:prod": "node scripts/sync-prod.ts",
