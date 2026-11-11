@@ -9,10 +9,7 @@ import { makeContentDir, mdxDoc } from '../helpers/fixture-content.ts'
 // with a fresh copy when the frontend's component table changes.
 const SAMPLE: unknown = JSON.parse(fs.readFileSync(path.join(import.meta.dirname, '../fixtures/contract.sample.json'), 'utf-8'))
 const contract = readContract(SAMPLE)
-const FRONTEND = {
-  url: new URL('https://preview.example.test'),
-  headers: { 'x-rehearsal': 'yes' },
-}
+const FRONTEND = new URL('https://preview.example.test')
 
 let root = ''
 
@@ -142,14 +139,13 @@ describe('fetchContract', () => {
     return fetchMock
   }
 
-  it('reads /contract.json from the frontend it was given, with its headers', async () => {
+  it('reads /contract.json from the frontend it was given', async () => {
     const fetchMock = stubFetch(() => Response.json(SAMPLE))
     expect([
       ...(await fetchContract(FRONTEND)).components.keys(),
     ]).toEqual(['MdxImage', 'Link'])
-    const [url, init] = fetchMock.mock.calls[0]!
+    const [url] = fetchMock.mock.calls[0]!
     expect(String(url)).toBe('https://preview.example.test/contract.json')
-    expect(init?.headers).toEqual({ 'x-rehearsal': 'yes' })
   })
 
   it.each([

@@ -24,7 +24,7 @@ const SECOND_PASS_DELAY_MS = 60_000
 
 const frontend = frontendFromEnv()
 const secret = requireEnv('REVALIDATION_SECRET')
-console.info(`[revalidate] Frontend: ${frontend.url.origin}`)
+console.info(`[revalidate] Frontend: ${frontend.origin}`)
 
 console.info('[revalidate] Success:', await revalidateFrontend(frontend, secret))
 

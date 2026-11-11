@@ -4,10 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { frontendFromEnv, postBodyHash, postBodyHashIn, reconcile, revalidateFrontend } from '../../src/frontend.ts'
 import { makeContentDir, mdxDoc } from '../helpers/fixture-content.ts'
 
-const FRONTEND = {
-  url: new URL('https://preview.example.test'),
-  headers: { 'x-rehearsal': 'yes' },
-}
+const FRONTEND = new URL('https://preview.example.test')
 
 function stubFetch(handler: (url: string, init?: RequestInit) => Response) {
   const fetchMock = vi.fn(async (input: URL | string, init?: RequestInit) => handler(String(input), init))
@@ -21,25 +18,12 @@ afterEach(() => {
 })
 
 describe('frontendFromEnv', () => {
-  it('is production unless a rehearsal sets FRONTEND_URL and FRONTEND_EXTRA_HEADERS', () => {
+  it('is production unless FRONTEND_URL is set', () => {
     vi.stubEnv('FRONTEND_URL', undefined)
-    vi.stubEnv('FRONTEND_EXTRA_HEADERS', undefined)
-    expect(frontendFromEnv()).toEqual({
-      url: new URL('https://tianwei.io'),
-      headers: {},
-    })
+    expect(frontendFromEnv().href).toBe('https://tianwei.io/')
 
     vi.stubEnv('FRONTEND_URL', 'http://localhost:3000')
-    vi.stubEnv('FRONTEND_EXTRA_HEADERS', '{"x-vercel-protection-bypass":"abc"}')
-    expect(frontendFromEnv()).toEqual({
-      url: new URL('http://localhost:3000'),
-      headers: { 'x-vercel-protection-bypass': 'abc' },
-    })
-  })
-
-  it('refuses extra headers that are not a JSON object of strings', () => {
-    vi.stubEnv('FRONTEND_EXTRA_HEADERS', '{"x-count":1}')
-    expect(() => frontendFromEnv()).toThrow('[env] FRONTEND_EXTRA_HEADERS must be a JSON object of strings')
+    expect(frontendFromEnv().href).toBe('http://localhost:3000/')
   })
 })
 
@@ -59,7 +43,7 @@ describe('revalidateFrontend', () => {
     expect(init).toMatchObject({
       method: 'POST',
       body: '{"tags":["posts"]}',
-      headers: { 'authorization': 'Bearer s3cret', 'x-rehearsal': 'yes' },
+      headers: { authorization: 'Bearer s3cret' },
     })
   })
 

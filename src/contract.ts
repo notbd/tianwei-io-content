@@ -3,7 +3,6 @@
  * content can be checked against it before anything is written. The PR
  * check and the deploy's gate both run `pnpm check:contract`.
  */
-import type { Frontend } from './frontend.ts'
 import type { ComponentRules } from './parser.ts'
 import type { ContentRecord } from './types.ts'
 import { z } from 'zod'
@@ -56,13 +55,12 @@ export function readContract(json: unknown): Contract {
 export class ContractUnavailableError extends Error {}
 
 /** GET /contract.json from the frontend. */
-export async function fetchContract(frontend: Frontend): Promise<Contract> {
-  const url = new URL(CONTRACT_PATH, frontend.url)
+export async function fetchContract(frontend: URL): Promise<Contract> {
+  const url = new URL(CONTRACT_PATH, frontend)
   let response: Response
   let body: string
   try {
     response = await fetch(url, {
-      headers: frontend.headers,
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     })
     body = await response.text()

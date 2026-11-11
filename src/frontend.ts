@@ -24,34 +24,12 @@ const RECONCILE_ROUND_DELAY_MS = 5_000
  */
 const PRODUCTION_FRONTEND = 'https://tianwei.io'
 
-/** Where the frontend is, and the headers every request to it carries. */
-export type Frontend = {
-  url: URL
-  headers: Record<string, string>
-}
-
-const extraHeaders = z.record(z.string(), z.string())
-
 /**
- * The production frontend, unless a local rehearsal points elsewhere:
- * FRONTEND_URL (say http://localhost:3000) and FRONTEND_EXTRA_HEADERS, a
- * JSON object of headers for every request (say a Vercel protection
- * bypass). The deploy workflow sets neither.
+ * The production frontend, unless FRONTEND_URL points elsewhere (say
+ * http://localhost:3000). The deploy workflow does not set it.
  */
-export function frontendFromEnv(): Frontend {
-  const url = new URL(readEnv('FRONTEND_URL') ?? PRODUCTION_FRONTEND)
-  const headersJson = readEnv('FRONTEND_EXTRA_HEADERS')
-  if (headersJson === undefined)
-    return { url, headers: {} }
-  try {
-    return {
-      url,
-      headers: extraHeaders.parse(JSON.parse(headersJson)),
-    }
-  }
-  catch {
-    throw new Error('[env] FRONTEND_EXTRA_HEADERS must be a JSON object of strings, such as {"x-vercel-protection-bypass":"..."}')
-  }
+export function frontendFromEnv(): URL {
+  return new URL(readEnv('FRONTEND_URL') ?? PRODUCTION_FRONTEND)
 }
 
 const revalidatedPosts = z.object({
@@ -64,12 +42,11 @@ const revalidatedPosts = z.object({
  * a 200 whose `revalidated` lists `posts` fails the deploy; a 502 means the
  * read failed and nothing was expired.
  */
-export async function revalidateFrontend(frontend: Frontend, secret: string): Promise<unknown> {
-  const endpoint = new URL('/api/revalidate', frontend.url)
+export async function revalidateFrontend(frontend: URL, secret: string): Promise<unknown> {
+  const endpoint = new URL('/api/revalidate', frontend)
   const response = await fetch(endpoint, {
     method: 'POST',
     headers: {
-      ...frontend.headers,
       'content-type': 'application/json',
       'authorization': `Bearer ${secret}`,
     },
@@ -161,7 +138,7 @@ export type ReconcileOptions = {
  * collects every problem and ends when its last request has; with any
  * problem it is tried again after a pause, three rounds in all.
  */
-export async function reconcile(frontend: Frontend, options: ReconcileOptions = {}): Promise<number> {
+export async function reconcile(frontend: URL, options: ReconcileOptions = {}): Promise<number> {
   const records = parseAllPosts(options.contentRoot ?? CONTENT_ROOT)
   const published = new Map(records
     .filter(record => record.isPublished)
@@ -189,15 +166,15 @@ export async function reconcile(frontend: Frontend, options: ReconcileOptions = 
 }
 
 async function reconcileRound(
-  frontend: Frontend,
+  frontend: URL,
   published: ReadonlyMap<string, string>,
   drafts: readonly string[],
   log: (line: string) => void,
 ): Promise<{ checked: number, failures: string[] }> {
-  const sitemapUrl = new URL('/sitemap.xml', frontend.url)
+  const sitemapUrl = new URL('/sitemap.xml', frontend)
   let sitemap: string
   try {
-    const page = await get(sitemapUrl, frontend, log)
+    const page = await get(sitemapUrl, log)
     if (page.status !== 200) {
       return {
         checked: 1,
@@ -259,11 +236,11 @@ async function reconcileRound(
 }
 
 /** What is wrong with one check's answer, if anything. Never throws. */
-async function runCheck(frontend: Frontend, check: Check, log: (line: string) => void): Promise<string | undefined> {
-  const url = new URL(check.path, frontend.url)
+async function runCheck(frontend: URL, check: Check, log: (line: string) => void): Promise<string | undefined> {
+  const url = new URL(check.path, frontend)
   let page: Fetched
   try {
-    page = await get(url, frontend, log)
+    page = await get(url, log)
   }
   catch (err) {
     return requestFailure(url, err)
@@ -289,10 +266,9 @@ type Fetched = {
   body: ArrayBuffer
 }
 
-/** GET with the frontend's headers, reading the whole body within the timeout, logged. */
-async function get(url: URL, frontend: Frontend, log: (line: string) => void): Promise<Fetched> {
+/** GET, reading the whole body within the timeout, logged. */
+async function get(url: URL, log: (line: string) => void): Promise<Fetched> {
   const response = await fetch(url, {
-    headers: frontend.headers,
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   })
   const body = await response.arrayBuffer()
