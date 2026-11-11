@@ -38,7 +38,7 @@ describe('revalidateFrontend', () => {
       success: true,
       revalidated: ['posts'],
     })
-    const [url, init] = fetchMock.mock.calls[0]!
+    const [url, init] = fetchMock.mock.calls[0] ?? []
     expect(String(url)).toBe('https://preview.example.test/api/revalidate')
     expect(init).toMatchObject({
       method: 'POST',
@@ -335,7 +335,7 @@ describe('reconcile', () => {
         inFlightAtEachSitemap.push(inFlight)
       inFlight++
       mostInFlight = Math.max(mostInFlight, inFlight)
-      const response = await (pages[pathname] ?? site[pathname]!)()
+      const response = await (pages[pathname] ?? site[pathname] ?? (() => new Response('missing', { status: 404 })))()
       const text = await response.text()
       // the body arrives later; the slow page's arrives last
       const delayMs = pathname === '/slow'

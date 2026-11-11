@@ -144,7 +144,7 @@ describe('fetchContract', () => {
     expect([
       ...(await fetchContract(FRONTEND)).components.keys(),
     ]).toEqual(['MdxImage', 'Link'])
-    const [url] = fetchMock.mock.calls[0]!
+    const [url] = fetchMock.mock.calls[0] ?? []
     expect(String(url)).toBe('https://preview.example.test/contract.json')
   })
 
