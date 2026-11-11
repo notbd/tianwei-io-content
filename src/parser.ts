@@ -11,6 +11,7 @@ import { z } from 'zod'
 import { AUTHOR_MAX_LENGTH, CATEGORY_MAX_LENGTH, SLUG_MAX_LENGTH } from '../drizzle/schema.ts'
 import { CONTENT_ROOT } from './config.ts'
 import { parseFrontmatterDate } from './date.ts'
+import { messageOf } from './errors.ts'
 
 /**
  * Validate that the given file path follows the required structure:
@@ -98,7 +99,10 @@ function calendarDate(value: unknown, ctx: z.RefinementCtx): Date {
     return parseFrontmatterDate(value)
   }
   catch (err) {
-    ctx.addIssue({ code: 'custom', message: (err as Error).message })
+    ctx.addIssue({
+      code: 'custom',
+      message: messageOf(err),
+    })
     return z.NEVER
   }
 }
@@ -297,7 +301,7 @@ export function parseMdxFile(
   }
   catch (err) {
     // js-yaml errors carry a line number but no file; add the path
-    throw new Error(`[parser] Invalid frontmatter YAML in "${filePath}": ${(err as Error).message}`)
+    throw new Error(`[parser] Invalid frontmatter YAML in "${filePath}": ${messageOf(err)}`)
   }
 
   const frontmatter = frontmatterSchema.safeParse(data)
@@ -364,7 +368,7 @@ export function parseAllPosts(contentRoot: string = CONTENT_ROOT, components?: C
         records.push(parseMdxFile(mdxFilePath, contentRoot, components))
       }
       catch (err) {
-        failures.push((err as Error).message)
+        failures.push(messageOf(err))
       }
     }
   }

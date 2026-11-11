@@ -8,6 +8,7 @@
 import process from 'node:process'
 import { createDb } from '../src/db.ts'
 import { loadLocalEnv, requireEnv } from '../src/env.ts'
+import { messageOf } from '../src/errors.ts'
 import { syncPosts } from '../src/sync.ts'
 
 loadLocalEnv()
@@ -26,7 +27,7 @@ try {
   console.info(`[sync-prod] Completed: ${result.upserted} upserted, ${result.deleted} deleted${deletions}`)
 }
 catch (err) {
-  console.error('[sync-prod] Sync failed (database unchanged):', (err as Error).message)
+  console.error('[sync-prod] Sync failed (database unchanged):', messageOf(err))
   process.exitCode = 1
 }
 finally {
