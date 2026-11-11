@@ -12,7 +12,7 @@ import { messageOf } from './errors.ts'
 import { REQUEST_TIMEOUT_MS } from './frontend.ts'
 import { parseAllPosts } from './parser.ts'
 
-export const CONTRACT_PATH = '/contract.json'
+const CONTRACT_PATH = '/contract.json'
 
 // Only the keys this engine knows: z.object drops the rest, so the
 // frontend may add keys without breaking older content deploys.

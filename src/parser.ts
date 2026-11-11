@@ -212,9 +212,8 @@ function elementErrors(node: MdxNode, where: string, components: ComponentRules 
 
   const component = components?.get(node.name)
   if (components !== undefined && component === undefined) {
-    return [`body: <${node.name}>${where} is not a post component (the frontend's contract lists ${[
-      ...components.keys(),
-    ].map(name => `<${name}>`).join(', ')})`]
+    const listed = Array.from(components.keys(), name => `<${name}>`).join(', ')
+    return [`body: <${node.name}>${where} is not a post component (the frontend's contract lists ${listed})`]
   }
 
   const attributes = node.attributes ?? []
@@ -231,9 +230,12 @@ function elementErrors(node: MdxNode, where: string, components: ComponentRules 
     return [`body: <${node.name}>${where}: attribute "${repeated[0]}" is given more than once`]
   const parsed = component.attributes.safeParse(Object.fromEntries(attributes.map(attribute => [attribute.name, attribute.value])))
   if (!parsed.success) {
-    return parsed.error.issues.map(issue => `body: <${node.name}>${where}: ${issue.path.length > 0
-      ? `${issue.path.join('.')}: `
-      : ''}${issue.message}`)
+    return parsed.error.issues.map((issue) => {
+      const field = issue.path.length > 0
+        ? `${issue.path.join('.')}: `
+        : ''
+      return `body: <${node.name}>${where}: ${field}${issue.message}`
+    })
   }
 
   if (!component.children && (node.children?.length ?? 0) > 0)
