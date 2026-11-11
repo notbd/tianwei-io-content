@@ -13,20 +13,21 @@
  */
 import { setTimeout as sleep } from 'node:timers/promises'
 import { loadLocalEnv, requireEnv } from '../src/env.ts'
-import { checkEveryPage, revalidateFrontend } from '../src/frontend.ts'
+import { checkEveryPage, frontendFromEnv, revalidateFrontend } from '../src/frontend.ts'
 
 loadLocalEnv()
 
 const SECOND_PASS_DELAY_MS = 60_000
 
-const frontendUrl = new URL(requireEnv('FRONTEND_URL'))
+const frontend = frontendFromEnv()
 const secret = requireEnv('REVALIDATION_SECRET')
+console.info(`[revalidate] Frontend: ${frontend.url.origin}`)
 
-console.info('[revalidate] Success:', await revalidateFrontend(frontendUrl, secret))
+console.info('[revalidate] Success:', await revalidateFrontend(frontend, secret))
 
 console.info(`[revalidate] Second pass in ${SECOND_PASS_DELAY_MS / 1000} s, after any render that read the old rows has stored its result`)
 await sleep(SECOND_PASS_DELAY_MS)
-console.info('[revalidate] Success:', await revalidateFrontend(frontendUrl, secret))
+console.info('[revalidate] Success:', await revalidateFrontend(frontend, secret))
 
-const pages = await checkEveryPage(frontendUrl)
+const pages = await checkEveryPage(frontend)
 console.info(`[check] All ${pages.length} pages answered 200`)

@@ -24,6 +24,7 @@
     "sync:prod": "tsx scripts/sync-prod.ts",
     "frontend:revalidate": "tsx scripts/revalidate-frontend.ts",
     "new-post": "tsx scripts/new-post.ts",
+    "check:contract": "tsx scripts/check-contract.ts",
     "lint": "eslint",
     "lint:fix": "eslint --fix",
     "typecheck": "tsc --noEmit",

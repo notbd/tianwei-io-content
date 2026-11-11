@@ -2,21 +2,60 @@
  * The content deploy's calls to the frontend: expire its content cache, then
  * prove every page renders. Kept out of the script so they can be tested.
  */
+import process from 'node:process'
+import { z } from 'zod'
 
 // a hung frontend must fail the deploy step, not stall it for minutes
-const REQUEST_TIMEOUT_MS = 60_000
+export const REQUEST_TIMEOUT_MS = 60_000
 const PAGE_CHECK_CONCURRENCY = 4
+
+/**
+ * The production frontend. A public value, so a constant rather than a
+ * secret: the deploy cannot be pointed at another environment by mistake.
+ */
+const PRODUCTION_FRONTEND = 'https://tianwei.io'
+
+/** Where the frontend is, and the headers every request to it carries. */
+export interface Frontend {
+  url: URL
+  headers: Record<string, string>
+}
+
+const extraHeaders = z.record(z.string(), z.string())
+
+/**
+ * The production frontend, unless a local rehearsal points elsewhere:
+ * FRONTEND_URL (say http://localhost:3000) and FRONTEND_EXTRA_HEADERS, a
+ * JSON object of headers for every request (say a Vercel protection
+ * bypass). The deploy workflow sets neither.
+ */
+export function frontendFromEnv(): Frontend {
+  const url = new URL(process.env.FRONTEND_URL || PRODUCTION_FRONTEND)
+  const headersJson = process.env.FRONTEND_EXTRA_HEADERS
+  if (!headersJson)
+    return { url, headers: {} }
+  try {
+    return {
+      url,
+      headers: extraHeaders.parse(JSON.parse(headersJson)),
+    }
+  }
+  catch {
+    throw new Error('[env] FRONTEND_EXTRA_HEADERS must be a JSON object of strings, such as {"x-vercel-protection-bypass":"..."}')
+  }
+}
 
 /**
  * POST /api/revalidate: the frontend expires the `posts` tag and re-fetches
  * the content through the API. A 207 (expired, but the re-fetch failed) is
  * a failure too.
  */
-export async function revalidateFrontend(frontendUrl: URL, secret: string): Promise<unknown> {
-  const endpoint = new URL('/api/revalidate', frontendUrl)
+export async function revalidateFrontend(frontend: Frontend, secret: string): Promise<unknown> {
+  const endpoint = new URL('/api/revalidate', frontend.url)
   const response = await fetch(endpoint, {
     method: 'POST',
     headers: {
+      ...frontend.headers,
       'content-type': 'application/json',
       'authorization': `Bearer ${secret}`,
     },
@@ -54,14 +93,15 @@ export async function revalidateFrontend(frontendUrl: URL, secret: string): Prom
  * too until it is fixed (the synced content has no older version to fall
  * back on); the check makes sure the author hears of it first.
  */
-export async function checkEveryPage(frontendUrl: URL): Promise<string[]> {
-  const sitemap = await fetch(new URL('/sitemap.xml', frontendUrl), {
+export async function checkEveryPage(frontend: Frontend): Promise<string[]> {
+  const sitemap = await fetch(new URL('/sitemap.xml', frontend.url), {
+    headers: frontend.headers,
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   })
   if (!sitemap.ok)
     throw new Error(`[check] /sitemap.xml answered ${sitemap.status}`)
 
-  // the sitemap holds canonical URLs; check the same paths on FRONTEND_URL
+  // the sitemap holds canonical URLs; check the same paths on this frontend
   const paths = [
     ...(await sitemap.text()).matchAll(/<loc>([^<]+)<\/loc>/g),
   ]
@@ -74,7 +114,8 @@ export async function checkEveryPage(frontendUrl: URL): Promise<string[]> {
   const worker = async () => {
     for (let path = queue.shift(); path !== undefined; path = queue.shift()) {
       try {
-        const page = await fetch(new URL(path, frontendUrl), {
+        const page = await fetch(new URL(path, frontend.url), {
+          headers: frontend.headers,
           signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
         })
         if (page.status !== 200)

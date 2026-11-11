@@ -1,7 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { checkEveryPage, revalidateFrontend } from '../../src/frontend.ts'
+import { checkEveryPage, frontendFromEnv, revalidateFrontend } from '../../src/frontend.ts'
 
-const FRONTEND = new URL('https://preview.example.test')
+const FRONTEND = {
+  url: new URL('https://preview.example.test'),
+  headers: { 'x-rehearsal': 'yes' },
+}
 
 function stubFetch(handler: (url: string, init?: RequestInit) => Response) {
   const fetchMock = vi.fn(async (input: URL | string, init?: RequestInit) => handler(String(input), init))
@@ -11,6 +14,30 @@ function stubFetch(handler: (url: string, init?: RequestInit) => Response) {
 
 afterEach(() => {
   vi.unstubAllGlobals()
+  vi.unstubAllEnvs()
+})
+
+describe('frontendFromEnv', () => {
+  it('is production unless a rehearsal sets FRONTEND_URL and FRONTEND_EXTRA_HEADERS', () => {
+    vi.stubEnv('FRONTEND_URL', undefined)
+    vi.stubEnv('FRONTEND_EXTRA_HEADERS', undefined)
+    expect(frontendFromEnv()).toEqual({
+      url: new URL('https://tianwei.io'),
+      headers: {},
+    })
+
+    vi.stubEnv('FRONTEND_URL', 'http://localhost:3000')
+    vi.stubEnv('FRONTEND_EXTRA_HEADERS', '{"x-vercel-protection-bypass":"abc"}')
+    expect(frontendFromEnv()).toEqual({
+      url: new URL('http://localhost:3000'),
+      headers: { 'x-vercel-protection-bypass': 'abc' },
+    })
+  })
+
+  it('refuses extra headers that are not a JSON object of strings', () => {
+    vi.stubEnv('FRONTEND_EXTRA_HEADERS', '{"x-count":1}')
+    expect(() => frontendFromEnv()).toThrow('[env] FRONTEND_EXTRA_HEADERS must be a JSON object of strings')
+  })
 })
 
 describe('revalidateFrontend', () => {
@@ -31,7 +58,7 @@ describe('revalidateFrontend', () => {
     expect(init).toMatchObject({
       method: 'POST',
       body: '{"tags":["posts"]}',
-      headers: { authorization: 'Bearer s3cret' },
+      headers: { 'authorization': 'Bearer s3cret', 'x-rehearsal': 'yes' },
     })
   })
 

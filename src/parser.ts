@@ -154,6 +154,13 @@ const mdxParser = createProcessor({
 const JAVASCRIPT_NODES = new Set(['mdxjsEsm', 'mdxFlowExpression', 'mdxTextExpression'])
 const JSX_ELEMENTS = new Set(['mdxJsxFlowElement', 'mdxJsxTextElement'])
 
+/**
+ * The components /contract.json lets a post use (src/contract.ts reads
+ * it): each one's attribute validator and whether it takes content
+ * between its tags.
+ */
+export type ComponentRules = ReadonlyMap<string, { attributes: z.ZodType, children: boolean }>
+
 interface MdxNode {
   type: string
   /** a JSX element's name; null for a fragment */
@@ -164,13 +171,18 @@ interface MdxNode {
 }
 
 /**
- * What is wrong with one JSX element the author wrote, checked in order and
- * stopping at the first step that fails:
+ * What is wrong with one JSX element the author wrote, checked in the order
+ * the frontend checks them and stopping at the first step that fails:
  * 1. no JavaScript (`prop={value}`, `{...spread}`), no fragment, no member
  *    name (`<A.B>`);
- * 3. every attribute has a value (`<MdxImage priority />` has none).
+ * 2. a component the contract lists;
+ * 3. every attribute has a value (`<MdxImage priority />` has none);
+ * 4. no attribute twice, and all of them, as written, pass the component's
+ *    schema (so `children="x"` and `key="x"` fail like any unknown one);
+ * 5. no content between the tags of a component that takes none.
+ * Without `components` (the sync's own parse) only steps 1 and 3 run.
  */
-function elementErrors(node: MdxNode, where: string): string[] {
+function elementErrors(node: MdxNode, where: string, components: ComponentRules | undefined): string[] {
   const jsAttribute = node.attributes?.some(attribute => attribute.type === 'mdxJsxExpressionAttribute'
     || (typeof attribute.value === 'object' && attribute.value !== null)) === true
   if (jsAttribute)
@@ -180,9 +192,34 @@ function elementErrors(node: MdxNode, where: string): string[] {
   if (node.name.includes('.'))
     return [`body: <${node.name}>${where}: member names are not allowed in posts`]
 
-  const valueless = node.attributes?.filter(attribute => attribute.value == null) ?? []
+  const component = components?.get(node.name)
+  if (components !== undefined && component === undefined) {
+    return [`body: <${node.name}>${where} is not a post component (the frontend's contract lists ${[
+      ...components.keys(),
+    ].map(name => `<${name}>`).join(', ')})`]
+  }
+
+  const attributes = node.attributes ?? []
+  const valueless = attributes.filter(attribute => attribute.value == null)
   if (valueless.length > 0)
     return valueless.map(attribute => `body: <${node.name}>${where}: attribute "${attribute.name}" has no value; give it a string`)
+
+  if (component === undefined)
+    return []
+
+  const names = attributes.map(attribute => attribute.name)
+  const repeated = names.filter((name, i) => names.indexOf(name) !== i)
+  if (repeated.length > 0)
+    return [`body: <${node.name}>${where}: attribute "${repeated[0]}" is given more than once`]
+  const parsed = component.attributes.safeParse(Object.fromEntries(attributes.map(attribute => [attribute.name, attribute.value])))
+  if (!parsed.success) {
+    return parsed.error.issues.map(issue => `body: <${node.name}>${where}: ${issue.path.length > 0
+      ? `${issue.path.join('.')}: `
+      : ''}${issue.message}`)
+  }
+
+  if (!component.children && (node.children?.length ?? 0) > 0)
+    return [`body: <${node.name}>${where} takes no content between its tags`]
 
   return []
 }
@@ -192,9 +229,10 @@ function elementErrors(node: MdxNode, where: string): string[] {
  * syntax error (MDX with GFM, as the frontend parses it), JavaScript
  * (import/export, `{expression}`, `prop={value}`, `{...spread}`), or a JSX
  * element the rules above refuse. Line numbers count from the top of the
- * file.
+ * file. Each rule lives only here: the sync runs it without a contract,
+ * `pnpm check:contract` with one.
  */
-function mdxBodyErrors(body: string, linesBeforeBody: number): string[] {
+function mdxBodyErrors(body: string, linesBeforeBody: number, components?: ComponentRules): string[] {
   let tree: Root
   try {
     tree = mdxParser.parse(body)
@@ -216,7 +254,7 @@ function mdxBodyErrors(body: string, linesBeforeBody: number): string[] {
     if (JAVASCRIPT_NODES.has(node.type))
       errors.push(`body: JavaScript is not allowed in posts${where} (${node.type}); give components string props`)
     else if (JSX_ELEMENTS.has(node.type))
-      errors.push(...elementErrors(node, where))
+      errors.push(...elementErrors(node, where, components))
     node.children?.forEach(visit)
   }
   visit(tree as MdxNode)
@@ -226,10 +264,12 @@ function mdxBodyErrors(body: string, linesBeforeBody: number): string[] {
 /**
  * Parse a single MDX file into a ContentRecord.
  * Throws with an aggregated message listing every invalid frontmatter field.
+ * With `components`, the body is held to the frontend's contract as well.
  */
 export function parseMdxFile(
   filePath: string,
   contentRoot: string = CONTENT_ROOT,
+  components?: ComponentRules,
 ): ContentRecord {
   const structure = validateMdxFileStructure(filePath, contentRoot)
   if (!structure.ok)
@@ -267,7 +307,7 @@ export function parseMdxFile(
     ...(hasNul(content)
       ? [`body: ${NO_NUL}`]
       : []),
-    ...mdxBodyErrors(content, linesBeforeBody),
+    ...mdxBodyErrors(content, linesBeforeBody, components),
   ]
   if (!frontmatter.success || errors.length > 0)
     throw new Error(`[parser] Invalid post "${filePath}":\n  - ${errors.join('\n  - ')}`)
@@ -291,8 +331,11 @@ export function parseMdxFile(
  * Also rejects duplicate slugs across categories: slug is the primary
  * identity of a post in the database, so two files mapping to the same
  * slug would silently overwrite each other.
+ *
+ * With `components`, every body (drafts too) is held to the frontend's
+ * contract as well.
  */
-export function parseAllPosts(contentRoot: string = CONTENT_ROOT): ContentRecord[] {
+export function parseAllPosts(contentRoot: string = CONTENT_ROOT, components?: ComponentRules): ContentRecord[] {
   if (!fs.existsSync(contentRoot))
     return []
 
@@ -315,7 +358,7 @@ export function parseAllPosts(contentRoot: string = CONTENT_ROOT): ContentRecord
 
     for (const mdxFilePath of mdxFilePaths) {
       try {
-        records.push(parseMdxFile(mdxFilePath, contentRoot))
+        records.push(parseMdxFile(mdxFilePath, contentRoot, components))
       }
       catch (err) {
         failures.push((err as Error).message)

@@ -42,3 +42,9 @@ jobs:
 
       - name: Test
         run: pnpm test
+
+      # Early feedback: until the production frontend serves /contract.json
+      # (or when it cannot be reached) this warns and passes. The deploy runs
+      # the same check with --require before it migrates.
+      - name: Check posts against the frontend's contract
+        run: pnpm check:contract
