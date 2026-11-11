@@ -5,15 +5,11 @@ import { validateMdxFileStructure } from '../../src/parser.ts'
 import { makeContentDir, mdxDoc } from '../helpers/fixture-content.ts'
 
 let root = ''
-let root2 = ''
 
 afterEach(() => {
-  for (const dir of [root, root2]) {
-    if (dir !== '')
-      fs.rmSync(dir, { recursive: true, force: true })
-  }
+  if (root !== '')
+    fs.rmSync(root, { recursive: true, force: true })
   root = ''
-  root2 = ''
 })
 
 describe('validateMdxFileStructure', () => {
@@ -84,7 +80,7 @@ describe('validateMdxFileStructure', () => {
     })
   })
 
-  it('rejects names that slugify to empty strings', () => {
+  it('rejects a filename that slugifies to an empty slug', () => {
     root = makeContentDir({
       'articles/---.mdx': mdxDoc(),
     })
@@ -93,18 +89,20 @@ describe('validateMdxFileStructure', () => {
         ok: false,
         reason: expect.stringContaining('empty slug'),
       })
+  })
 
-    root2 = makeContentDir({
+  it('rejects a category that slugifies to an empty string', () => {
+    root = makeContentDir({
       '日本語/post.mdx': mdxDoc(),
     })
-    expect(validateMdxFileStructure(path.join(root2, '日本語/post.mdx'), root2))
+    expect(validateMdxFileStructure(path.join(root, '日本語/post.mdx'), root))
       .toMatchObject({
         ok: false,
         reason: expect.stringContaining('empty string'),
       })
   })
 
-  it('rejects slugs and categories exceeding the varchar column limits', () => {
+  it('rejects a slug longer than the slug column', () => {
     const longName = 'a'.repeat(250)
     root = makeContentDir({
       [`articles/${longName}.mdx`]: mdxDoc(),
@@ -114,12 +112,14 @@ describe('validateMdxFileStructure', () => {
         ok: false,
         reason: expect.stringContaining('max 200'),
       })
+  })
 
+  it('rejects a category longer than the category column', () => {
     const longCategory = 'c'.repeat(150)
-    root2 = makeContentDir({
+    root = makeContentDir({
       [`${longCategory}/post.mdx`]: mdxDoc(),
     })
-    expect(validateMdxFileStructure(path.join(root2, `${longCategory}/post.mdx`), root2))
+    expect(validateMdxFileStructure(path.join(root, `${longCategory}/post.mdx`), root))
       .toMatchObject({
         ok: false,
         reason: expect.stringContaining('max 100'),
