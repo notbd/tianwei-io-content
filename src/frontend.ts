@@ -90,20 +90,28 @@ const META_TAG = /<meta\b[^>]*>/gi
 const ATTRIBUTE = /([^\s"'<>/=]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'<>=`]+))/g
 
 /**
- * The content of the page's <meta name="post-body-sha256">, wherever the
- * tag is in the HTML (not only in <head>); undefined without one. Reads
- * that tag's attributes, never just any 64-digit hex on the page.
+ * The content of every <meta name="post-body-sha256"> on the page, wherever
+ * the tag is in the HTML (not only in <head>). A tag without a content
+ * attribute counts too, as ''. Reads the tags' attributes, never just any
+ * 64-digit hex on the page.
+ *
+ * It finds the tags in the text and does not parse HTML, so the same text
+ * inside a comment or a script counts as a tag. One of those next to the
+ * real tag fails the page, which must have exactly one. One of those alone,
+ * without a real tag, is compared with the expected hash and fails as well:
+ * to pass, the page would have to print the new body's correct hash there.
  */
-export function postBodyHashIn(html: string): string | undefined {
+export function postBodyHashesIn(html: string): string[] {
+  const hashes: string[] = []
   for (const [tag] of html.matchAll(META_TAG)) {
     const attributes = new Map(Array.from(tag.matchAll(ATTRIBUTE), ([, name = '', double, single, bare]) => [
       name.toLowerCase(),
       double ?? single ?? bare ?? '',
     ]))
     if (attributes.get('name') === POST_BODY_HASH_META)
-      return attributes.get('content')
+      hashes.push(attributes.get('content') ?? '')
   }
-  return undefined
+  return hashes
 }
 
 /** One request of a reconcile round and what its answer must be. */
@@ -128,15 +136,16 @@ export type ReconcileOptions = {
  * The content is parsed once, on entry, and every round compares against
  * that snapshot:
  * - the sitemap's /posts/<slug> pages are exactly the published posts;
- * - every page the sitemap lists answers 200, and each post page's
- *   post-body-sha256 equals the hash of the body synced here (a page that
- *   failed to re-render after the expiry keeps serving its previous
- *   version with a 200, which only the hash tells apart);
+ * - every page the sitemap lists answers 200, and each post page has
+ *   exactly one post-body-sha256 tag, equal to the hash of the body synced
+ *   here (a page that failed to re-render after the expiry keeps serving
+ *   its previous version with a 200, which only the hash tells apart);
  * - /feed.xml and every published post's /opengraph-image answer 200;
  * - every draft's /posts/<slug> answers 404.
  * Every body is read to the end within the request's timeout. A round
- * collects every problem and ends when its last request has; with any
- * problem it is tried again after a pause, three rounds in all.
+ * collects every problem, a sitemap that cannot be read included, and ends
+ * when its last request has; with any problem it is tried again after a
+ * pause, three rounds in all.
  */
 export async function reconcile(frontend: URL, options: ReconcileOptions = {}): Promise<number> {
   const records = parseAllPosts(options.contentRoot ?? CONTENT_ROOT)
@@ -193,8 +202,24 @@ async function reconcileRound(
   }
 
   // the sitemap holds canonical URLs; check the same paths on this frontend
-  const paths = Array.from(sitemap.matchAll(/<loc>([^<]+)<\/loc>/g), ([, loc = '']) => new URL(loc).pathname)
-  if (paths.length === 0) {
+  let pages: { path: string, postSlug: string | undefined }[]
+  try {
+    pages = Array.from(sitemap.matchAll(/<loc>([^<]+)<\/loc>/g), ([, loc = '']) => {
+      const path = new URL(loc).pathname
+      return {
+        path,
+        postSlug: postSlugOf(path),
+      }
+    })
+  }
+  catch (err) {
+    // an address that is no URL, or a slug that does not decode
+    return {
+      checked: 1,
+      failures: [`${sitemapUrl.href} lists an address that cannot be read: ${messageOf(err)}`],
+    }
+  }
+  if (pages.length === 0) {
     return {
       checked: 1,
       failures: [`${sitemapUrl.href} lists no pages`],
@@ -202,7 +227,7 @@ async function reconcileRound(
   }
 
   const failures: string[] = []
-  const listedPosts = new Set(paths.flatMap(path => postSlugOf(path) ?? []))
+  const listedPosts = new Set(pages.flatMap(page => page.postSlug ?? []))
   for (const slug of published.keys()) {
     if (!listedPosts.has(slug))
       failures.push(`${sitemapUrl.href} does not list /posts/${slug}, a published post`)
@@ -213,10 +238,10 @@ async function reconcileRound(
   }
 
   const checks: Check[] = [
-    ...paths.map((path): Check => ({
-      path,
+    ...pages.map((page): Check => ({
+      path: page.path,
       status: 200,
-      hash: published.get(postSlugOf(path) ?? ''),
+      hash: published.get(page.postSlug ?? ''),
     })),
     { path: '/feed.xml', status: 200 },
     ...Array.from(published.keys(), (slug): Check => ({ path: `/posts/${slug}/opengraph-image`, status: 200 })),
@@ -254,9 +279,12 @@ async function runCheck(frontend: URL, check: Check, log: (line: string) => void
       : `${url.href} answered ${page.status}, expected 200`
   }
   if (check.hash !== undefined) {
-    const shown = postBodyHashIn(new TextDecoder().decode(page.body))
-    if (shown !== check.hash)
-      return `${url.href} still shows a previous version: expected ${POST_BODY_HASH_META} ${check.hash}, the page has ${shown ?? 'no such meta tag'}`
+    const shown = postBodyHashesIn(new TextDecoder().decode(page.body))
+    const [hash] = shown
+    if (shown.length !== 1)
+      return `${url.href} has ${shown.length} ${POST_BODY_HASH_META} meta tags, expected exactly one`
+    if (hash !== check.hash)
+      return `${url.href} still shows a previous version: expected ${POST_BODY_HASH_META} ${check.hash}, the page has ${hash}`
   }
   return undefined
 }
