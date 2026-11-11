@@ -7,11 +7,8 @@
  * 2. A minute later, revalidate again. A page that was rendering while the
  *    sync committed may have read the old rows and stored its result after
  *    the first expiry, where it would stay until the next sync. Such a
- *    render ends within about 40 s of the sync: a page reads the API in
- *    two steps at most (a post page: the list, then the post), the read in
- *    flight returns within its 10 s attempt, and the step after it gives
- *    up after about 30 s (the frontend fetcher's deadlines). So by now any
- *    such write has landed, and this expiry removes it.
+ *    render ends within about 40 s of the sync (tianwei.io ADR-0002 says
+ *    why), so by now any such write has landed, and this expiry removes it.
  * 3. Reconcile: every page answers, and each post page reports the hash of
  *    the body synced here (src/frontend.ts reconcile). A page that failed
  *    to render keeps serving its previous version with a 200, so only the

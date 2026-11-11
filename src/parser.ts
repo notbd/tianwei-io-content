@@ -165,11 +165,12 @@ const frontmatterSchema = z.strictObject({
 // The frontend compiles post bodies with @mdx-js/mdx and the same rules
 // (tianwei.io src/lib/mdx.tsx). Checking them here keeps a body it cannot
 // render out of the database: otherwise the sync succeeds and that post's
-// page fails in production. The sync's own parse stops a syntax error and
-// JavaScript; which components and attributes a body may use needs the
-// frontend's contract, which `pnpm check:contract` brings. Both sides must
-// parse the same syntax: when the frontend adds a remark plugin that
-// extends it, add the plugin here too.
+// page fails in production. The sync's own parse stops a syntax error,
+// JavaScript and what else needs no contract (steps 1 and 3 of
+// elementErrors below); which components and attributes a body may use
+// needs the frontend's contract, which `pnpm check:contract` brings. Both
+// sides must parse the same syntax: when the frontend adds a remark plugin
+// that extends it, add the plugin here too.
 const mdxParser = createProcessor({
   remarkPlugins: [remarkGfm],
 })

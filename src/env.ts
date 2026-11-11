@@ -19,25 +19,24 @@ import dotenv from 'dotenv'
  * require hook, where top-level await is not available.
  */
 export function loadLocalEnv(file = '.env.local'): void {
-  parseEnvFile(
+  // read only for the refusal: nothing from .env is loaded here
+  readRefusingDatabaseUrl(
     path.join(path.dirname(file), '.env'),
     'drizzle-kit loads that file by itself, so pnpm dev:up would migrate that database.',
   )
-  const values = parseEnvFile(
+  dotenv.populate(process.env, readRefusingDatabaseUrl(
     file,
     'The migration and the sync read that file, so pnpm dev:up would migrate that database and write every save to it.',
-  )
-  if (values !== undefined)
-    dotenv.populate(process.env, values)
+  ))
 }
 
 /**
- * The file's variables, or undefined without the file. Throws if it sets
+ * The file's variables, none without the file. Throws if it sets
  * DATABASE_URL; `risk` says what would happen otherwise, for the message.
  */
-function parseEnvFile(file: string, risk: string) {
+function readRefusingDatabaseUrl(file: string, risk: string): Record<string, string> {
   if (!fs.existsSync(file))
-    return undefined
+    return {}
   const values = dotenv.parse(fs.readFileSync(file))
   if ('DATABASE_URL' in values) {
     throw new Error(
