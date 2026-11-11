@@ -62,16 +62,6 @@ describe('parseMdxFile', () => {
     expect(record.updatedAt?.getTime()).toBe(Date.UTC(2024, 6, 1, 4))
   })
 
-  it('rejects an updatedAt earlier than createdAt', () => {
-    expect(() => parseDoc(mdxDoc({ createdAt: '2024-06-15', updatedAt: '2024-06-14' })))
-      .toThrow(/updatedAt: must not be before createdAt/)
-  })
-
-  it('rejects a malformed updatedAt', () => {
-    expect(() => parseDoc(mdxDoc({ updatedAt: '\'01-07-2024\'' })))
-      .toThrow(/updatedAt:.*Invalid date format/)
-  })
-
   it('rejects a YAML timestamp instead of truncating it to a date', () => {
     expect(() => parseDoc(mdxDoc({ createdAt: '2024-01-05 23:00:00-05:00' })))
       .toThrow(/createdAt:.*Invalid date format/)
@@ -120,19 +110,41 @@ describe('parseMdxFile', () => {
     })
   })
 
-  it('rejects an unknown key instead of silently dropping it', () => {
-    expect(() => parseDoc(mdxDoc().replace('isPublished', 'updateAt: 2024-07-01\nisPublished')))
-      .toThrow(/frontmatter: Unrecognized key: "updateAt"/)
-  })
-
-  it('rejects a missing title', () => {
-    expect(() => parseDoc(mdxDoc({ title: undefined })))
-      .toThrow(/title: expected a non-empty string/)
-  })
-
-  it('rejects a non-boolean isPublished', () => {
-    expect(() => parseDoc(mdxDoc({ isPublished: 'yes' })))
-      .toThrow(/isPublished: expected a boolean/)
+  it.each([
+    [
+      'an unknown key, instead of silently dropping it',
+      mdxDoc().replace('isPublished', 'updateAt: 2024-07-01\nisPublished'),
+      /frontmatter: Unrecognized key: "updateAt"/,
+    ],
+    [
+      'a missing title',
+      mdxDoc({ title: undefined }),
+      /title: expected a non-empty string/,
+    ],
+    [
+      'a non-boolean isPublished',
+      mdxDoc({ isPublished: 'yes' }),
+      /isPublished: expected a boolean/,
+    ],
+    [
+      'an over-long author (varchar limit)',
+      mdxDoc({
+        author: 'a'.repeat(120),
+      }),
+      /author: exceeds 100 characters/,
+    ],
+    [
+      'an updatedAt earlier than createdAt',
+      mdxDoc({ createdAt: '2024-06-15', updatedAt: '2024-06-14' }),
+      /updatedAt: must not be before createdAt/,
+    ],
+    [
+      'a malformed updatedAt',
+      mdxDoc({ updatedAt: '\'01-07-2024\'' }),
+      /updatedAt:.*Invalid date format/,
+    ],
+  ])('rejects %s', (_name, doc, error) => {
+    expect(() => parseDoc(doc)).toThrow(error)
   })
 
   it('aggregates every invalid field into one error', () => {
@@ -204,13 +216,6 @@ describe('parseMdxFile', () => {
     root = makeContentDir({ 'articles/broken.mdx': '---\ntitle: [unclosed\n---\nBody\n' })
     expect(() => parseMdxFile(path.join(root, 'articles/broken.mdx'), root))
       .toThrow(/Invalid frontmatter YAML in ".*broken\.mdx"/)
-  })
-
-  it('rejects an over-long author (varchar limit)', () => {
-    expect(() => parseDoc(mdxDoc({
-      author: 'a'.repeat(120),
-    })))
-      .toThrow(/author: exceeds 100 characters/)
   })
 
   it('rejects files containing invalid UTF-8 replacement characters', () => {
