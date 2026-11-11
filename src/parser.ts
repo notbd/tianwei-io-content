@@ -187,10 +187,10 @@ export type ComponentRules = ReadonlyMap<string, { attributes: z.ZodType, childr
 type MdxNode = {
   type: string
   /** a JSX element's name; null for a fragment */
-  name?: string | null
-  children?: MdxNode[]
-  attributes?: { type: string, name?: string, value?: unknown }[]
-  position?: { start: { line: number } }
+  name?: string | null | undefined
+  children?: MdxNode[] | undefined
+  attributes?: { type: string, name?: string | undefined, value?: unknown }[] | undefined
+  position?: { start: { line: number } } | undefined
 }
 
 /**
@@ -282,7 +282,7 @@ function mdxBodyErrors(body: string, linesBeforeBody: number, components?: Compo
       errors.push(...elementErrors(node, where, components))
     node.children?.forEach(visit)
   }
-  visit(tree as MdxNode)
+  visit(tree)
   return errors
 }
 
