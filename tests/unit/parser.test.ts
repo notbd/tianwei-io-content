@@ -218,6 +218,33 @@ describe('parseMdxFile', () => {
       .toThrow(`body: JavaScript is not allowed in posts at line 9 (${kind})`)
   })
 
+  it('parses GFM as the frontend does: a footnote definition is checked too', () => {
+    root = makeContentDir({
+      'articles/a.mdx': mdxDoc({ body: 'Text[^1].\n\n[^1]: <MdxImage src="a" width={480} />\n' }),
+    })
+    expect(() => parseMdxFile(path.join(root, 'articles/a.mdx'), root))
+      .toThrow('body: JavaScript is not allowed in posts at line 11 (an expression or spread prop)')
+  })
+
+  it('parses GFM as the frontend does: a | in an attribute inside a table cell is a syntax error', () => {
+    root = makeContentDir({
+      'articles/a.mdx': mdxDoc({ body: '| a | b |\n| - | - |\n| <Link href="/a|b">x</Link> | y |\n' }),
+    })
+    expect(() => parseMdxFile(path.join(root, 'articles/a.mdx'), root))
+      .toThrow(/body: MDX syntax error at line 11: Unexpected end of file in attribute value/)
+  })
+
+  it.each([
+    ['a fragment', 'Text <>inside</> it.\n', 'body: fragments (<>) are not allowed in posts at line 9'],
+    ['a member name', '<A.B />\n', 'body: <A.B> at line 9: member names are not allowed in posts'],
+    ['an attribute without a value', '<MdxImage src="a" alt="b" width="1" height="2" priority />\n', 'body: <MdxImage> at line 9: attribute "priority" has no value'],
+  ])('rejects JSX the frontend cannot take: %s', (_name, body, message) => {
+    root = makeContentDir({
+      'articles/a.mdx': mdxDoc({ body }),
+    })
+    expect(() => parseMdxFile(path.join(root, 'articles/a.mdx'), root)).toThrow(message)
+  })
+
   it('accepts components with string props', () => {
     root = makeContentDir({
       'articles/a.mdx': mdxDoc({ body: '<MdxImage src="a/b" width="480" height="320" alt="An image" />\n' }),

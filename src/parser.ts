@@ -6,6 +6,7 @@ import { createProcessor } from '@mdx-js/mdx'
 import slugify from '@sindresorhus/slugify'
 import matter from 'gray-matter'
 import yaml from 'js-yaml'
+import remarkGfm from 'remark-gfm'
 import { z } from 'zod'
 import { CONTENT_ROOT } from './config.ts'
 import { parseFrontmatterDate } from './date.ts'
@@ -142,24 +143,56 @@ const frontmatterSchema = z.strictObject({
   },
 )
 
-// The frontend compiles post bodies with @mdx-js/mdx and refuses to run any
-// JavaScript in them (tianwei.io src/lib/mdx.tsx). Checking the same here
-// keeps a body it cannot render out of the database: otherwise the sync
-// succeeds and that post's page fails in production.
-const mdxParser = createProcessor()
+// The frontend compiles post bodies with @mdx-js/mdx and the same rules
+// (tianwei.io src/lib/mdx.tsx). Checking them here keeps a body it cannot
+// render out of the database: otherwise the sync succeeds and that post's
+// page fails in production. Both sides must parse the same syntax: when the
+// frontend adds a remark plugin that extends it, add the plugin here too.
+const mdxParser = createProcessor({
+  remarkPlugins: [remarkGfm],
+})
 const JAVASCRIPT_NODES = new Set(['mdxjsEsm', 'mdxFlowExpression', 'mdxTextExpression'])
+const JSX_ELEMENTS = new Set(['mdxJsxFlowElement', 'mdxJsxTextElement'])
 
 interface MdxNode {
   type: string
+  /** a JSX element's name; null for a fragment */
+  name?: string | null
   children?: MdxNode[]
-  attributes?: { type: string, value?: unknown }[]
+  attributes?: { type: string, name?: string, value?: unknown }[]
   position?: { start: { line: number } }
 }
 
 /**
+ * What is wrong with one JSX element the author wrote, checked in order and
+ * stopping at the first step that fails:
+ * 1. no JavaScript (`prop={value}`, `{...spread}`), no fragment, no member
+ *    name (`<A.B>`);
+ * 3. every attribute has a value (`<MdxImage priority />` has none).
+ */
+function elementErrors(node: MdxNode, where: string): string[] {
+  const jsAttribute = node.attributes?.some(attribute => attribute.type === 'mdxJsxExpressionAttribute'
+    || (typeof attribute.value === 'object' && attribute.value !== null)) === true
+  if (jsAttribute)
+    return [`body: JavaScript is not allowed in posts${where} (an expression or spread prop); give components string props`]
+  if (node.name == null)
+    return [`body: fragments (<>) are not allowed in posts${where}`]
+  if (node.name.includes('.'))
+    return [`body: <${node.name}>${where}: member names are not allowed in posts`]
+
+  const valueless = node.attributes?.filter(attribute => attribute.value == null) ?? []
+  if (valueless.length > 0)
+    return valueless.map(attribute => `body: <${node.name}>${where}: attribute "${attribute.name}" has no value; give it a string`)
+
+  return []
+}
+
+/**
  * Why the frontend could not render this MDX body, if it could not: a
- * syntax error, or JavaScript (import/export, `{expression}`, `prop={value}`,
- * `{...spread}`). Line numbers count from the top of the file.
+ * syntax error (MDX with GFM, as the frontend parses it), JavaScript
+ * (import/export, `{expression}`, `prop={value}`, `{...spread}`), or a JSX
+ * element the rules above refuse. Line numbers count from the top of the
+ * file.
  */
 function mdxBodyErrors(body: string, linesBeforeBody: number): string[] {
   let tree: Root
@@ -177,14 +210,13 @@ function mdxBodyErrors(body: string, linesBeforeBody: number): string[] {
 
   const errors: string[] = []
   const visit = (node: MdxNode): void => {
-    const jsAttribute = node.attributes?.some(attribute => attribute.type === 'mdxJsxExpressionAttribute'
-      || (typeof attribute.value === 'object' && attribute.value !== null)) === true
-    if (JAVASCRIPT_NODES.has(node.type) || jsAttribute) {
-      const line = node.position === undefined
-        ? ''
-        : ` at line ${linesBeforeBody + node.position.start.line}`
-      errors.push(`body: JavaScript is not allowed in posts${line} (${jsAttribute ? 'an expression or spread prop' : node.type}); give components string props`)
-    }
+    const where = node.position === undefined
+      ? ''
+      : ` at line ${linesBeforeBody + node.position.start.line}`
+    if (JAVASCRIPT_NODES.has(node.type))
+      errors.push(`body: JavaScript is not allowed in posts${where} (${node.type}); give components string props`)
+    else if (JSX_ELEMENTS.has(node.type))
+      errors.push(...elementErrors(node, where))
     node.children?.forEach(visit)
   }
   visit(tree as MdxNode)
