@@ -28,7 +28,7 @@ This repo owns the posts, the database schema and every write; the API only read
 - **Checked against the frontend**: `pnpm check:contract` holds every post, drafts included, to the frontend's [`/contract.json`](https://tianwei.io/contract.json): the components a post may use and their attributes, and the time zone dates are anchored to. Pull requests run it, and the deploy runs it before writing anything ([tianwei.io ADR-0006](https://github.com/notbd/tianwei.io/blob/main/docs/adr/0006-cross-repo-releases.md)).
 - **One transaction**: posts are upserted by slug, so ids stay stable, and rows whose files are gone are deleted. Readers never see a half-synced table ([ADR-0001](./docs/adr/0001-transactional-reconcile-sync.md)).
 - **Guard rails**: concurrent syncs wait on a Postgres advisory lock, and a sync that would leave no published post is refused unless `--allow-empty` is passed, so a bad checkout cannot empty production. `--allow-empty` only lets the sync through: the frontend still refuses to build, and the API's deploy check still fails, without a published post.
-- **No production database by accident**: `DATABASE_URL` is read only from the process environment. A `.env.local` that sets it is refused by every script, since they all read that file and `pnpm dev:up` would migrate that database and write every save to it.
+- **No production database by accident**: `DATABASE_URL` is read only from the process environment. `drizzle-kit` and every script in `scripts/` but `new-post` read `.env.local`, and they refuse one that sets it, since `pnpm dev:up` would otherwise migrate that database and write every save to it.
 - **Dates**: `createdAt` and `updatedAt` are calendar dates in `America/New_York`, stored as that day's midnight there, whatever the machine's time zone ([ADR-0003](./docs/adr/0003-content-time-zone.md)).
 - **Migrations**: the schema is in `drizzle/`, and the migration history is committed and applied by the deploy, never generated on the fly ([ADR-0002](./docs/adr/0002-committed-migration-history.md)).
 
@@ -128,8 +128,14 @@ A push to `main` that touches content or sync code runs `.github/workflows/deplo
 3. Check every post, drafts included, against the frontend's `/contract.json` (`pnpm check:contract --require`). A post the frontend cannot render, or a frontend with no contract to give, stops the deploy here with the database untouched.
 4. Apply pending migrations (`drizzle-kit migrate`).
 5. Sync every post to Neon in one transaction.
-6. Revalidate the frontend: it reads the content through the API and expires its cache only when every read works. A 502 means a read failed and nothing was expired: the deploy fails and the site stays as it was. Revalidate again a minute later, for any page that was rendering during the sync.
-7. Reconcile: every page in the sitemap must answer 200, and each post page must report the hash of the body synced in step 5, so a page still showing its previous version fails the deploy; the diagram below lists the other checks. Three rounds at most, 5 s apart.
+6. Revalidate the frontend: it reads the content through the API and expires its cache only when every read works. Anything but a 200 fails the deploy, and the site stays as it was (the statuses are in [the frontend's README](https://github.com/notbd/tianwei.io/blob/main/README.md), Revalidation API). Revalidate again a minute later, for any page that was rendering during the sync.
+7. Reconcile: parse the posts once, then check the frontend against them:
+   - the sitemap lists exactly the published posts;
+   - every URL in the sitemap answers 200, and each post page's `post-body-sha256` equals the hash of the body synced in step 5, so a page still showing its previous version fails the deploy;
+   - `/feed.xml` and every published post's `/opengraph-image` answer 200;
+   - every draft's `/posts/<slug>` answers 404.
+
+   Each request has 60 s, the whole body included. A round collects every problem; if there is any, the round runs again 5 s later, three rounds in all. A failure names the URL and whether it answered an error, timed out or still shows a previous version (with the expected and the reported hash); the log keeps `x-vercel-cache` and `age` for every request.
 
 ```mermaid
 sequenceDiagram
@@ -148,11 +154,11 @@ sequenceDiagram
   FE->>API: read the list, every post and the categories
   API->>DB: SELECT
   FE->>FE: expire the posts tag, only if every read worked
-  FE-->>GH: 200, or 502 with nothing expired (the deploy fails)
+  FE-->>GH: 200, or 502 and the deploy fails
   Note over GH,FE: a minute later, the same revalidation again
   GH->>FE: GET every page in the sitemap, the feed, each OG image, each draft
   FE-->>GH: 200 (404 for drafts), each post page with the synced body's hash
-  Note right of GH: any mismatch after three rounds fails the deploy
+  Note right of GH: a mismatch that outlasts the retries fails the deploy
 ```
 
 Deploys run one at a time, so two syncs never interleave. What each check proves, and what it does not, is in [tianwei.io ADR-0006](https://github.com/notbd/tianwei.io/blob/main/docs/adr/0006-cross-repo-releases.md). A change that spans repos ships in the order that ADR sets, and is staged first per [`release-verification.md`](https://github.com/notbd/tianwei.io/blob/main/docs/release-verification.md).
