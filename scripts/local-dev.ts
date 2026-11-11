@@ -38,7 +38,7 @@ if (process.argv.includes('--no-watch')) {
 else {
   let stop: () => Promise<void>
   try {
-    ({ stop } = await startWatching(db, () => pool.end(), { allowEmpty }))
+    ({ stop } = await startWatching(db, async () => pool.end(), { allowEmpty }))
   }
   catch (err) {
     console.error('[local-dev] Could not watch the content (watcher and database closed):', messageOf(err))

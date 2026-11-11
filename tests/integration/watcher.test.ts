@@ -32,7 +32,7 @@ afterEach(async () => {
   await testDb.client.close()
 })
 
-function nextSync(onSyncEvents: (() => void)[]): Promise<void> {
+async function nextSync(onSyncEvents: (() => void)[]): Promise<void> {
   return new Promise((resolve) => {
     onSyncEvents.push(resolve)
   })
@@ -69,8 +69,10 @@ function holdTransactions() {
   const held: (() => void)[] = []
   const db: Db = new Proxy(testDb.db, {
     get(target, property, receiver) {
-      if (property !== 'transaction')
-        return Reflect.get(target, property, receiver)
+      if (property !== 'transaction') {
+        const value: unknown = Reflect.get(target, property, receiver)
+        return value
+      }
       return async (...args: Parameters<Db['transaction']>) => {
         await new Promise<void>(resolve => held.push(resolve))
         return target.transaction(...args)

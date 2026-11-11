@@ -159,7 +159,7 @@ describe('fetchContract', () => {
     ],
     [
       'a network error',
-      () => Promise.reject(new TypeError('fetch failed')),
+      async () => Promise.reject(new TypeError('fetch failed')),
     ],
   ])('reports %s as no contract to give', async (_name, respond) => {
     stubFetch(respond)

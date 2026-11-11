@@ -175,7 +175,7 @@ describe('reconcile', () => {
     return requested
   }
 
-  const run = (log: (line: string) => void = () => {}) => reconcile(FRONTEND, { contentRoot: root, roundDelayMs: 0, log })
+  const run = async (log: (line: string) => void = () => {}) => reconcile(FRONTEND, { contentRoot: root, roundDelayMs: 0, log })
 
   it('passes when the sitemap, every page, the feed, the images and the drafts all match', async () => {
     makeContent()
@@ -222,7 +222,7 @@ describe('reconcile', () => {
     makeContent()
     serve({
       '/posts/beta': () => new Response('error', { status: 500 }),
-      '/feed.xml': () => Promise.reject(new DOMException('The operation timed out.', 'TimeoutError')),
+      '/feed.xml': async () => Promise.reject(new DOMException('The operation timed out.', 'TimeoutError')),
       '/posts/alpha/opengraph-image': () => new Response('missing', { status: 404 }),
     })
     const result = run()

@@ -34,9 +34,9 @@ describe('validateMdxFileStructure', () => {
       'articles/drafts/deep.mdx': mdxDoc(),
     })
     const result = validateMdxFileStructure(path.join(root, 'articles/drafts/deep.mdx'), root)
-    expect(result).toMatchObject({
+    expect(result).toEqual({
       ok: false,
-      reason: expect.stringContaining('expected structure'),
+      reason: 'expected structure {content}/{category}/{post}.mdx, got "articles/drafts/deep.mdx"',
     })
   })
 
@@ -54,9 +54,9 @@ describe('validateMdxFileStructure', () => {
     })
     const outside = path.join(root, '..', 'articles', 'escape.mdx')
     const result = validateMdxFileStructure(outside, root)
-    expect(result).toMatchObject({
+    expect(result).toEqual({
       ok: false,
-      reason: expect.stringContaining('outside the content root'),
+      reason: `path is outside the content root: "${outside}"`,
     })
   })
 
@@ -65,18 +65,18 @@ describe('validateMdxFileStructure', () => {
       'articles/readme.md': mdxDoc(),
     })
     const result = validateMdxFileStructure(path.join(root, 'articles/readme.md'), root)
-    expect(result).toMatchObject({
+    expect(result).toEqual({
       ok: false,
-      reason: expect.stringContaining('.mdx'),
+      reason: 'invalid file type "readme.md": expected an .mdx file',
     })
   })
 
   it('rejects a category that is a file, not a directory', () => {
     root = makeContentDir({ articles: 'i am a file' })
     const result = validateMdxFileStructure(path.join(root, 'articles/post.mdx'), root)
-    expect(result).toMatchObject({
+    expect(result).toEqual({
       ok: false,
-      reason: expect.stringContaining('not a directory'),
+      reason: 'category "articles" is not a directory under the content root',
     })
   })
 
@@ -85,9 +85,9 @@ describe('validateMdxFileStructure', () => {
       'articles/---.mdx': mdxDoc(),
     })
     expect(validateMdxFileStructure(path.join(root, 'articles/---.mdx'), root))
-      .toMatchObject({
+      .toEqual({
         ok: false,
-        reason: expect.stringContaining('empty slug'),
+        reason: 'filename "---.mdx" slugifies to an empty slug',
       })
   })
 
@@ -96,9 +96,9 @@ describe('validateMdxFileStructure', () => {
       '日本語/post.mdx': mdxDoc(),
     })
     expect(validateMdxFileStructure(path.join(root, '日本語/post.mdx'), root))
-      .toMatchObject({
+      .toEqual({
         ok: false,
-        reason: expect.stringContaining('empty string'),
+        reason: 'category "日本語" slugifies to an empty string',
       })
   })
 
@@ -108,9 +108,9 @@ describe('validateMdxFileStructure', () => {
       [`articles/${longName}.mdx`]: mdxDoc(),
     })
     expect(validateMdxFileStructure(path.join(root, `articles/${longName}.mdx`), root))
-      .toMatchObject({
+      .toEqual({
         ok: false,
-        reason: expect.stringContaining('max 200'),
+        reason: `filename "${longName}.mdx" slugifies to a 250-char slug (max 200)`,
       })
   })
 
@@ -120,9 +120,9 @@ describe('validateMdxFileStructure', () => {
       [`${longCategory}/post.mdx`]: mdxDoc(),
     })
     expect(validateMdxFileStructure(path.join(root, `${longCategory}/post.mdx`), root))
-      .toMatchObject({
+      .toEqual({
         ok: false,
-        reason: expect.stringContaining('max 100'),
+        reason: `category "${longCategory}" slugifies to 150 chars (max 100)`,
       })
   })
 })

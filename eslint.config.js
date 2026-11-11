@@ -1,6 +1,10 @@
 import antfu from '@antfu/eslint-config'
 
 export default antfu({
+  // type-aware rules, against the one tsconfig that covers every .ts file
+  typescript: {
+    tsconfigPath: 'tsconfig.json',
+  },
   // byte-for-byte copies of other services' output (the frontend's /contract.json)
   ignores: ['tests/fixtures/**'],
   rules: {

@@ -30,10 +30,18 @@ export function loadLocalEnv(file = '.env.local'): void {
   dotenv.populate(process.env, values)
 }
 
+/** A variable's value; set but empty counts as unset. */
+export function readEnv(name: string): string | undefined {
+  const value = process.env[name]
+  return value === ''
+    ? undefined
+    : value
+}
+
 /** The value of a variable that must be set and non-empty. */
 export function requireEnv(name: string): string {
-  const value = process.env[name]
-  if (!value)
+  const value = readEnv(name)
+  if (value === undefined)
     throw new Error(`[env] Missing required variable: ${name} (see .env.example)`)
   return value
 }

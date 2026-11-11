@@ -1,6 +1,6 @@
 import type { Config } from 'drizzle-kit'
 import process from 'node:process'
-import { loadLocalEnv, requireEnv } from './src/env.ts'
+import { loadLocalEnv, readEnv, requireEnv } from './src/env.ts'
 
 loadLocalEnv()
 
@@ -10,13 +10,13 @@ loadLocalEnv()
  *   or one command typed on purpose; see src/env.ts), wins.
  * - Otherwise, the local Docker Postgres from .env.local.
  */
-const remoteUrl = process.env.DATABASE_URL
+const remoteUrl = readEnv('DATABASE_URL')
 
 export default {
   schema: './drizzle/schema.ts',
   out: './drizzle/migrations',
   dialect: 'postgresql',
-  dbCredentials: remoteUrl
+  dbCredentials: remoteUrl !== undefined
     ? { url: remoteUrl }
     : {
         host: 'localhost',

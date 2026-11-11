@@ -195,6 +195,11 @@ describe('parseMdxFile', () => {
       .toThrow(/Invalid content path/)
   })
 
+  it('names the problem when the frontmatter is YAML but not a mapping', () => {
+    expect(() => parseDoc('---\njust a sentence\n---\n\nBody.\n'))
+      .toThrow(/Invalid frontmatter YAML in ".*a\.mdx": frontmatter must be a YAML mapping of keys to values/)
+  })
+
   it('names the file when the YAML itself is malformed', () => {
     root = makeContentDir({ 'articles/broken.mdx': '---\ntitle: [unclosed\n---\nBody\n' })
     expect(() => parseMdxFile(path.join(root, 'articles/broken.mdx'), root))

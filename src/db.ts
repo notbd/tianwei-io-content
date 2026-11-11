@@ -3,6 +3,7 @@ import { drizzle } from 'drizzle-orm/node-postgres'
 import { Pool } from 'pg'
 
 import * as schema from '../drizzle/schema.ts'
+import { readEnv } from './env.ts'
 
 /**
  * Create a connection pool + Drizzle instance.
@@ -15,7 +16,7 @@ import * as schema from '../drizzle/schema.ts'
  * utilities never opens a database connection as a side effect.
  */
 export function createDb() {
-  const remoteUrl = process.env.DATABASE_URL
+  const remoteUrl = readEnv('DATABASE_URL')
 
   if (remoteUrl === undefined && process.env.LOCAL_POSTGRES_USER === undefined) {
     throw new Error(
@@ -24,7 +25,7 @@ export function createDb() {
     )
   }
 
-  const pool = remoteUrl
+  const pool = remoteUrl !== undefined
     ? new Pool({
         connectionString: remoteUrl,
         // Only applies when the URL has no sslmode: pg lets the URL's
@@ -42,7 +43,9 @@ export function createDb() {
         ssl: false,
       })
 
-  console.info(`[db] Connecting to ${remoteUrl ? 'remote' : 'local'} database`)
+  console.info(`[db] Connecting to ${remoteUrl === undefined
+    ? 'local'
+    : 'remote'} database`)
 
   const db = drizzle(pool, { schema })
   return { db, pool }

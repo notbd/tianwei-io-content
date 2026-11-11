@@ -39,8 +39,8 @@ export function validateMdxFileStructure(
   if (pathSegments.length !== 2)
     return { ok: false, reason: `expected structure {content}/{category}/{post}.mdx, got "${relativePath}"` }
 
-  const [rawCategory, rawFilename] = pathSegments
-  if (!rawCategory || !rawFilename)
+  const [rawCategory = '', rawFilename = ''] = pathSegments
+  if (rawCategory === '' || rawFilename === '')
     return { ok: false, reason: `malformed content path: "${relativePath}"` }
 
   let categoryIsDirectory: boolean
@@ -88,7 +88,13 @@ export function validateMdxFileStructure(
  */
 const FRONTMATTER_OPTIONS = {
   engines: {
-    yaml: (input: string): object => yaml.load(input, { schema: yaml.CORE_SCHEMA }),
+    yaml: (input: string): object => {
+      // js-yaml 3 types load() as any; anything but a mapping is no frontmatter
+      const data: unknown = yaml.load(input, { schema: yaml.CORE_SCHEMA })
+      if (typeof data !== 'object' || data === null)
+        throw new Error('frontmatter must be a YAML mapping of keys to values')
+      return data
+    },
     javascript: (): object => {
       throw new Error('frontmatter must be YAML')
     },

@@ -68,18 +68,18 @@ export async function fetchContract(frontend: Frontend): Promise<Contract> {
     body = await response.text()
   }
   catch (err) {
-    throw new ContractUnavailableError(`[contract] ${url} could not be fetched: ${messageOf(err)}`)
+    throw new ContractUnavailableError(`[contract] ${url.href} could not be fetched: ${messageOf(err)}`)
   }
   if (response.status === 404)
-    throw new ContractUnavailableError(`[contract] ${url} answered 404`)
+    throw new ContractUnavailableError(`[contract] ${url.href} answered 404`)
   if (!response.ok)
-    throw new Error(`[contract] ${url} answered ${response.status}: ${body.slice(0, 300)}`)
+    throw new Error(`[contract] ${url.href} answered ${response.status}: ${body.slice(0, 300)}`)
 
   try {
     return readContract(JSON.parse(body))
   }
   catch (err) {
-    throw new Error(`[contract] ${url} is not a contract this engine can read: ${messageOf(err)}`)
+    throw new Error(`[contract] ${url.href} is not a contract this engine can read: ${messageOf(err)}`)
   }
 }
 

@@ -4,10 +4,10 @@
  * tested.
  */
 import { createHash } from 'node:crypto'
-import process from 'node:process'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { z } from 'zod'
 import { CONTENT_ROOT } from './config.ts'
+import { readEnv } from './env.ts'
 import { messageOf } from './errors.ts'
 import { parseAllPosts } from './parser.ts'
 
@@ -39,9 +39,9 @@ const extraHeaders = z.record(z.string(), z.string())
  * bypass). The deploy workflow sets neither.
  */
 export function frontendFromEnv(): Frontend {
-  const url = new URL(process.env.FRONTEND_URL || PRODUCTION_FRONTEND)
-  const headersJson = process.env.FRONTEND_EXTRA_HEADERS
-  if (!headersJson)
+  const url = new URL(readEnv('FRONTEND_URL') ?? PRODUCTION_FRONTEND)
+  const headersJson = readEnv('FRONTEND_EXTRA_HEADERS')
+  if (headersJson === undefined)
     return { url, headers: {} }
   try {
     return {
@@ -91,7 +91,7 @@ export async function revalidateFrontend(frontend: Frontend, secret: string): Pr
   }
   catch {
     // e.g. a proxy/CDN HTML error page with a 200 status
-    throw new Error(`[revalidate] Non-JSON response (${response.status}) from ${endpoint}: ${rawBody.slice(0, 300)}`)
+    throw new Error(`[revalidate] Non-JSON response (${response.status}) from ${endpoint.href}: ${rawBody.slice(0, 300)}`)
   }
 
   const parsed = revalidatedPosts.safeParse(payload)
@@ -201,7 +201,7 @@ async function reconcileRound(
     if (page.status !== 200) {
       return {
         checked: 1,
-        failures: [`${sitemapUrl} answered ${page.status}`],
+        failures: [`${sitemapUrl.href} answered ${page.status}`],
       }
     }
     sitemap = new TextDecoder().decode(page.body)
@@ -220,7 +220,7 @@ async function reconcileRound(
   if (paths.length === 0) {
     return {
       checked: 1,
-      failures: [`${sitemapUrl} lists no pages`],
+      failures: [`${sitemapUrl.href} lists no pages`],
     }
   }
 
@@ -228,11 +228,11 @@ async function reconcileRound(
   const listedPosts = new Set(paths.flatMap(path => postSlugOf(path) ?? []))
   for (const slug of published.keys()) {
     if (!listedPosts.has(slug))
-      failures.push(`${sitemapUrl} does not list /posts/${slug}, a published post`)
+      failures.push(`${sitemapUrl.href} does not list /posts/${slug}, a published post`)
   }
   for (const slug of listedPosts) {
     if (!published.has(slug))
-      failures.push(`${sitemapUrl} lists /posts/${slug}, which is not a published post`)
+      failures.push(`${sitemapUrl.href} lists /posts/${slug}, which is not a published post`)
   }
 
   const checks: Check[] = [
@@ -271,15 +271,15 @@ async function runCheck(frontend: Frontend, check: Check, log: (line: string) =>
 
   if (page.status !== check.status) {
     if (check.status === 404)
-      return `${url} answered ${page.status}, but it is a draft and must answer 404`
+      return `${url.href} answered ${page.status}, but it is a draft and must answer 404`
     return page.status >= 500
-      ? `${url} answered ${page.status}: the page failed to render`
-      : `${url} answered ${page.status}, expected 200`
+      ? `${url.href} answered ${page.status}: the page failed to render`
+      : `${url.href} answered ${page.status}, expected 200`
   }
   if (check.hash !== undefined) {
     const shown = postBodyHashIn(new TextDecoder().decode(page.body))
     if (shown !== check.hash)
-      return `${url} still shows a previous version: expected ${POST_BODY_HASH_META} ${check.hash}, the page has ${shown ?? 'no such meta tag'}`
+      return `${url.href} still shows a previous version: expected ${POST_BODY_HASH_META} ${check.hash}, the page has ${shown ?? 'no such meta tag'}`
   }
   return undefined
 }
@@ -302,8 +302,8 @@ async function get(url: URL, frontend: Frontend, log: (line: string) => void): P
 
 function requestFailure(url: URL, err: unknown): string {
   return err instanceof Error && err.name === 'TimeoutError'
-    ? `${url} timed out after ${REQUEST_TIMEOUT_MS / 1000} s`
-    : `${url} failed: ${messageOf(err)}`
+    ? `${url.href} timed out after ${REQUEST_TIMEOUT_MS / 1000} s`
+    : `${url.href} failed: ${messageOf(err)}`
 }
 
 /** The slug of a /posts/<slug> path; undefined for any other path. */

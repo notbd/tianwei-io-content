@@ -127,7 +127,7 @@ export function watchContent(db: Db, options: WatchOptions = {}): ContentWatcher
   }, () => {})
 
   let closing: Promise<void> | undefined
-  function close(): Promise<void> {
+  async function close(): Promise<void> {
     closing ??= (async () => {
       closed = true
       clearTimeout(timer)
