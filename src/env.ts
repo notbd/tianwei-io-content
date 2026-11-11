@@ -9,9 +9,9 @@ import dotenv from 'dotenv'
  *
  * DATABASE_URL comes only from the process environment: the deploy's
  * secret, or `DATABASE_URL=... pnpm sync:prod` typed for one command. A
- * file that sets it is refused, because every script reads this file:
- * `pnpm dev:up` would migrate that database and the watcher would write
- * every save to it.
+ * file that sets it is refused, because the migration and the sync read
+ * this file: `pnpm dev:up` would migrate that database and the watcher
+ * would write every save to it.
  *
  * Synchronous on purpose: drizzle-kit loads drizzle.config.ts through a
  * require hook, where top-level await is not available.
@@ -22,7 +22,7 @@ export function loadLocalEnv(file = '.env.local'): void {
   const values = dotenv.parse(fs.readFileSync(file))
   if ('DATABASE_URL' in values) {
     throw new Error(
-      `[env] ${file} sets DATABASE_URL. Every script reads that file, so pnpm dev:up would migrate `
+      `[env] ${file} sets DATABASE_URL. The migration and the sync read that file, so pnpm dev:up would migrate `
       + 'that database and write every save to it. Delete the line and pass the URL for one command '
       + 'instead: DATABASE_URL=... pnpm sync:prod',
     )
