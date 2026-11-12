@@ -57,8 +57,14 @@ function revalidateLocalFrontend() {
     (err: unknown) => console.error(`[dev] Could not revalidate ${frontend.origin}:`, messageOf(err)),
   )
 }
-if (frontend !== undefined && secret !== undefined)
+if (frontend !== undefined && secret !== undefined) {
   console.info(`[dev] Every sync revalidates ${frontend.origin}`)
+}
+else if (readEnv('FRONTEND_URL') !== undefined) {
+  console.info(frontend === undefined
+    ? '[dev] FRONTEND_URL is not on this machine (127.0.0.1 or localhost): no sync revalidates it'
+    : '[dev] REVALIDATION_SECRET is not set: no sync revalidates the frontend')
+}
 
 async function release() {
   // the API's driver keeps its connections open; do not wait for them
