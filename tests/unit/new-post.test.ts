@@ -15,8 +15,8 @@ afterEach(() => {
 describe('todayInContentTimeZone', () => {
   it('is the date in New York, not in UTC or on this machine', () => {
     // 03:30 UTC on Nov 2 is still Nov 1 in New York
-    expect(todayInContentTimeZone(new Date('2026-11-02T03:30:00Z'))).toBe('2026-11-01')
-    expect(todayInContentTimeZone(new Date('2026-11-02T05:30:00Z'))).toBe('2026-11-02')
+    expect(todayInContentTimeZone(Temporal.Instant.from('2026-11-02T03:30:00Z'))).toBe('2026-11-01')
+    expect(todayInContentTimeZone(Temporal.Instant.from('2026-11-02T05:30:00Z'))).toBe('2026-11-02')
   })
 })
 

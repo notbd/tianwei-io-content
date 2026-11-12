@@ -3,9 +3,8 @@ import { SLUG_MAX_LENGTH } from '../drizzle/schema.ts'
 import { CONTENT_TIME_ZONE } from './config.ts'
 
 /** Today's calendar date where posts are authored, as frontmatter wants it ('yyyy-MM-dd'). */
-export function todayInContentTimeZone(now: Date = new Date()): string {
-  // en-CA formats dates as yyyy-mm-dd
-  return new Intl.DateTimeFormat('en-CA', { timeZone: CONTENT_TIME_ZONE }).format(now)
+export function todayInContentTimeZone(now: Temporal.Instant = Temporal.Now.instant()): string {
+  return now.toZonedDateTimeISO(CONTENT_TIME_ZONE).toPlainDate().toString()
 }
 
 /**

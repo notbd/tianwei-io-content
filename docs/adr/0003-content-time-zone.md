@@ -29,8 +29,8 @@ One explicit model, one constant per side:
   (`FRONTMATTER_OPTIONS` in `src/parser.ts`, `parseFrontmatterDate` in
   `src/date.ts`).
 - **Storage**: the UTC **instant** of that zone's midnight (e.g.
-  `2025-10-23T04:00:00Z` in EDT, `05:00Z` in EST), computed with a
-  dependency-free Intl-based zone-offset conversion (two-pass, handles
+  `2025-10-23T04:00:00Z` in EDT, `05:00Z` in EST), computed with
+  `Temporal`, which Node ships (`PlainDate.toZonedDateTime`; it handles
   DST transition days). Deterministic on any machine.
 - **Display**: the frontend renders every date with its
   `DISPLAY_TIME_ZONE` constant, which MUST equal `CONTENT_TIME_ZONE`.
