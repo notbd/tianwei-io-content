@@ -1,13 +1,10 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { frontendFromEnv, postBodyHash, postBodyHashIn, reconcile, revalidateFrontend } from '../../src/frontend.ts'
+import { frontendFromEnv, localFrontendFromEnv, postBodyHash, postBodyHashesIn, reconcile, revalidateFrontend } from '../../src/frontend.ts'
 import { makeContentDir, mdxDoc } from '../helpers/fixture-content.ts'
 
-const FRONTEND = {
-  url: new URL('https://preview.example.test'),
-  headers: { 'x-rehearsal': 'yes' },
-}
+const FRONTEND = new URL('https://preview.example.test')
 
 function stubFetch(handler: (url: string, init?: RequestInit) => Response) {
   const fetchMock = vi.fn(async (input: URL | string, init?: RequestInit) => handler(String(input), init))
@@ -21,25 +18,41 @@ afterEach(() => {
 })
 
 describe('frontendFromEnv', () => {
-  it('is production unless a rehearsal sets FRONTEND_URL and FRONTEND_EXTRA_HEADERS', () => {
+  it('is production unless FRONTEND_URL is set', () => {
     vi.stubEnv('FRONTEND_URL', undefined)
-    vi.stubEnv('FRONTEND_EXTRA_HEADERS', undefined)
-    expect(frontendFromEnv()).toEqual({
-      url: new URL('https://tianwei.io'),
-      headers: {},
-    })
+    expect(frontendFromEnv().href).toBe('https://tianwei.io/')
 
     vi.stubEnv('FRONTEND_URL', 'http://localhost:3000')
-    vi.stubEnv('FRONTEND_EXTRA_HEADERS', '{"x-vercel-protection-bypass":"abc"}')
-    expect(frontendFromEnv()).toEqual({
-      url: new URL('http://localhost:3000'),
-      headers: { 'x-vercel-protection-bypass': 'abc' },
-    })
+    expect(frontendFromEnv().href).toBe('http://localhost:3000/')
   })
 
-  it('refuses extra headers that are not a JSON object of strings', () => {
-    vi.stubEnv('FRONTEND_EXTRA_HEADERS', '{"x-count":1}')
-    expect(() => frontendFromEnv()).toThrow('[env] FRONTEND_EXTRA_HEADERS must be a JSON object of strings')
+  it('names the variable when it is not an http(s) URL', () => {
+    vi.stubEnv('FRONTEND_URL', 'localhost:3000')
+    expect(() => frontendFromEnv()).toThrow('FRONTEND_URL is not an http(s) URL: "localhost:3000"')
+  })
+})
+
+describe('localFrontendFromEnv', () => {
+  it.each([
+    ['http://127.0.0.1:3000', 'http://127.0.0.1:3000/'],
+    ['http://localhost:3000', 'http://localhost:3000/'],
+  ])('is %s when FRONTEND_URL names this machine', (value, href) => {
+    vi.stubEnv('FRONTEND_URL', value)
+    expect(localFrontendFromEnv()?.href).toBe(href)
+  })
+
+  it.each([
+    ['unset', undefined],
+    ['the production frontend', 'https://tianwei.io'],
+    ['a host that only starts with localhost', 'https://localhost.example.com'],
+  ])('is undefined when FRONTEND_URL is %s', (_name, value) => {
+    vi.stubEnv('FRONTEND_URL', value)
+    expect(localFrontendFromEnv()).toBeUndefined()
+  })
+
+  it.each(['127.0.0.1:3000', 'localhost:3000'])('names the variable when it is not an http(s) URL, such as %s without http://', (value) => {
+    vi.stubEnv('FRONTEND_URL', value)
+    expect(() => localFrontendFromEnv()).toThrow(`FRONTEND_URL is not an http(s) URL: "${value}"`)
   })
 })
 
@@ -54,12 +67,12 @@ describe('revalidateFrontend', () => {
       success: true,
       revalidated: ['posts'],
     })
-    const [url, init] = fetchMock.mock.calls[0]!
+    const [url, init] = fetchMock.mock.calls[0] ?? []
     expect(String(url)).toBe('https://preview.example.test/api/revalidate')
     expect(init).toMatchObject({
       method: 'POST',
       body: '{"tags":["posts"]}',
-      headers: { 'authorization': 'Bearer s3cret', 'x-rehearsal': 'yes' },
+      headers: { authorization: 'Bearer s3cret' },
     })
   })
 
@@ -102,18 +115,18 @@ describe('postBodyHash', () => {
   })
 })
 
-describe('postBodyHashIn', () => {
+describe('postBodyHashesIn', () => {
   const hash = 'ab'.repeat(32)
 
   it.each([
     ['in <head>', `<html><head><meta charSet="utf-8"/><meta name="post-body-sha256" content="${hash}"/></head></html>`],
     ['in <body>, content first, single quotes', `<body><p>x</p><META content='${hash}' name='post-body-sha256'></body>`],
   ])('reads the tag %s', (_name, html) => {
-    expect(postBodyHashIn(html)).toBe(hash)
+    expect(postBodyHashesIn(html)).toEqual([hash])
   })
 
   it('ignores other meta tags and any other 64-digit hex on the page', () => {
-    expect(postBodyHashIn(`<meta name="description" content="${hash}"><p>${hash}</p>`)).toBeUndefined()
+    expect(postBodyHashesIn(`<meta name="description" content="${hash}"><p>${hash}</p>`)).toEqual([])
   })
 })
 
@@ -136,9 +149,7 @@ describe('reconcile', () => {
     })
   }
 
-  const postPage = (body: string | undefined) => () => new Response(body === undefined
-    ? '<html><body>no meta</body></html>'
-    : `<html><head><meta name="post-body-sha256" content="${postBodyHash(`\n${body}`)}"/></head><body>…</body></html>`)
+  const postPage = (body: string) => () => new Response(`<html><head><meta name="post-body-sha256" content="${postBodyHash(`\n${body}`)}"/></head><body>…</body></html>`)
 
   function sitemap(...paths: string[]) {
     return () => new Response(`<urlset>${paths.map(p => `<url><loc>https://tianwei.io${p}</loc></url>`).join('')}</urlset>`)
@@ -209,13 +220,60 @@ describe('reconcile', () => {
     expect(requested.filter(p => p === '/sitemap.xml')).toHaveLength(3)
   })
 
-  it('reports a post page without the hash', async () => {
+  const alphaTag = `<meta name="post-body-sha256" content="${postBodyHash('\nAlpha.\n')}"/>`
+
+  it.each([
+    ['no tag', '<html><body>no meta</body></html>', 0],
+    // the tags are found in the text: a comment's counts
+    ['a false tag in a comment before the real one', `<!--<meta name="post-body-sha256" content="fake">-->${alphaTag}`, 2],
+    ['a second tag without a content', `${alphaTag}<meta name="post-body-sha256">`, 2],
+  ])('fails a post page with %s: it must have exactly one', async (_name, html, count) => {
     makeContent()
     serve({
-      '/posts/beta': postPage(undefined),
+      '/posts/alpha': () => new Response(html),
     })
-    await expect(run()).rejects.toThrow('/posts/beta still shows a previous version: expected post-body-sha256 ')
-    await expect(run()).rejects.toThrow('the page has no such meta tag')
+    await expect(run()).rejects.toThrow(`https://preview.example.test/posts/alpha has ${count} post-body-sha256 meta tags, expected exactly one`)
+  })
+
+  it('passes when a post page has its tag on a later round', async () => {
+    makeContent()
+    let alphaAnswers = 0
+    const requested = serve({
+      '/posts/alpha': () => alphaAnswers++ === 0
+        ? new Response('<html><body>no meta</body></html>')
+        : postPage('Alpha.\n')(),
+    })
+
+    expect(await run()).toBe(9)
+    expect(requested.filter(p => p === '/sitemap.xml')).toHaveLength(2)
+  })
+
+  const unreadableSitemap = () => new Response('<urlset><url><loc>not-a-url</loc></url></urlset>')
+
+  it('tries again after a sitemap that lists an unreadable address', async () => {
+    makeContent()
+    let sitemapAnswers = 0
+    const requested = serve({
+      '/sitemap.xml': () => sitemapAnswers++ === 0
+        ? unreadableSitemap()
+        : sitemap('/', '/posts', '/posts/alpha', '/posts/beta')(),
+    })
+
+    expect(await run()).toBe(9)
+    expect(requested.filter(p => p === '/sitemap.xml')).toHaveLength(2)
+  })
+
+  it.each([
+    ['is no URL', 'not-a-url'],
+    ['has a slug that does not decode', 'https://tianwei.io/posts/%'],
+  ])('reports a sitemap whose address %s, after three rounds', async (_name, loc) => {
+    makeContent()
+    const requested = serve({
+      '/sitemap.xml': () => new Response(`<urlset><url><loc>${loc}</loc></url></urlset>`),
+    })
+
+    await expect(run()).rejects.toThrow('https://preview.example.test/sitemap.xml lists an address that cannot be read: ')
+    expect(requested).toEqual(['/sitemap.xml', '/sitemap.xml', '/sitemap.xml'])
   })
 
   it('tells a failed render, a timeout and a missing page apart', async () => {
@@ -259,6 +317,16 @@ describe('reconcile', () => {
       })),
     })
     await expect(run()).rejects.toThrow('/posts/alpha failed: body disconnected')
+  })
+
+  it('says why a request failed: fetch keeps the reason in the cause', async () => {
+    makeContent()
+    serve({
+      '/posts/alpha': async () => Promise.reject(new TypeError('fetch failed', {
+        cause: new Error('other side closed'),
+      })),
+    })
+    await expect(run()).rejects.toThrow('/posts/alpha failed: fetch failed (other side closed)')
   })
 
   it('passes on a later round, comparing against the content as it was on entry', async () => {
@@ -306,7 +374,7 @@ describe('reconcile', () => {
         inFlightAtEachSitemap.push(inFlight)
       inFlight++
       mostInFlight = Math.max(mostInFlight, inFlight)
-      const response = await (pages[pathname] ?? site[pathname]!)()
+      const response = await (pages[pathname] ?? site[pathname] ?? (() => new Response('missing', { status: 404 })))()
       const text = await response.text()
       // the body arrives later; the slow page's arrives last
       const delayMs = pathname === '/slow'

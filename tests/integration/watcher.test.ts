@@ -5,19 +5,19 @@ import path from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { posts } from '../../drizzle/schema.ts'
+import { openLocalDb } from '../../src/localDb.ts'
 import { startWatching, watchContent } from '../../src/watcher.ts'
 import { makeContentDir, mdxDoc } from '../helpers/fixture-content.ts'
-import { createTestDb } from '../helpers/test-db.ts'
 
 // Exercises the debounce + running/pending latch against a real (in-memory)
 // database and a real chokidar watcher on a tmpdir.
 
 let root = ''
-let testDb: Awaited<ReturnType<typeof createTestDb>>
+let testDb: Awaited<ReturnType<typeof openLocalDb>>
 let watcher: ReturnType<typeof watchContent> | undefined
 
 beforeEach(async () => {
-  testDb = await createTestDb()
+  testDb = await openLocalDb()
 })
 
 afterEach(async () => {
@@ -184,10 +184,10 @@ describe('watchContent', () => {
     await vi.waitFor(() => expect(held).toHaveLength(1))
     fs.writeFileSync(path.join(root, 'articles/post.mdx'), mdxDoc({ title: 'Version 2' }))
     await changeSeen(log)
-    held[0]!()
+    held[0]?.()
 
     await vi.waitFor(() => expect(held).toHaveLength(2), { timeout: 10_000 })
-    held[1]!()
+    held[1]?.()
     await vi.waitFor(async () => {
       const [row] = await testDb.db.select({ title: posts.title }).from(posts)
       expect(row?.title).toBe('Version 2')
@@ -243,7 +243,7 @@ describe('startWatching', () => {
     expect(stopped).toBe(false)
     expect(release).not.toHaveBeenCalled()
 
-    held[0]!()
+    held[0]?.()
     await stopping
     expect(order).toEqual(['reconcile finished', 'pool closed'])
     await sleep(500)

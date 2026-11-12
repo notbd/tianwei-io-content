@@ -16,7 +16,7 @@ import { frontendFromEnv } from '../src/frontend.ts'
 loadLocalEnv()
 
 const frontend = frontendFromEnv()
-console.info(`[contract] Frontend: ${frontend.url.origin}`)
+console.info(`[contract] Frontend: ${frontend.origin}`)
 
 try {
   const contract = await fetchContract(frontend)

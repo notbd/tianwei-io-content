@@ -29,6 +29,9 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
+      # Third-party, so pinned to a commit (GitHub's own actions stay on
+      # tags): a moved tag cannot change the pnpm that later steps run. The
+      # pnpm version comes from packageManager.
       - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
       - uses: actions/setup-node@v7
         with:
@@ -51,6 +54,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
+      # Third-party, so pinned to a commit (GitHub's own actions stay on
+      # tags): a moved tag cannot change the pnpm that later steps run. The
+      # pnpm version comes from packageManager.
       - name: Setup pnpm
         uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
 

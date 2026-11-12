@@ -5,15 +5,15 @@ import dotenv from 'dotenv'
 
 /**
  * Load .env.local into process.env (variables already set win). Every entry
- * point that reads the file goes through here: drizzle.config.ts and the
- * scripts.
+ * point that reads the file goes through here.
  *
  * DATABASE_URL comes only from the process environment: the deploy's
  * secret, or `DATABASE_URL=... pnpm sync:prod` typed for one command. A
- * file that sets it is refused, because the migration and the sync read
- * this file: `pnpm dev:up` would migrate that database and the watcher
- * would write every save to it. A .env next to it is refused the same way:
- * nothing here loads it, but drizzle-kit does by itself.
+ * file that sets it is refused. Local development never reads the
+ * variable, but `pnpm db:migrate` and `pnpm sync:prod` do, and with the
+ * URL in this file they would use that database without being told to. A
+ * .env next to it is refused the same way: nothing here loads it, but
+ * drizzle-kit does by itself.
  *
  * Synchronous on purpose: drizzle-kit loads drizzle.config.ts through a
  * require hook, where top-level await is not available.
@@ -22,11 +22,11 @@ export function loadLocalEnv(file = '.env.local'): void {
   // read only for the refusal: nothing from .env is loaded here
   readRefusingDatabaseUrl(
     path.join(path.dirname(file), '.env'),
-    'drizzle-kit loads that file by itself, so pnpm dev:up would migrate that database.',
+    'drizzle-kit loads that file by itself, so pnpm db:migrate would migrate that database without being told to.',
   )
   dotenv.populate(process.env, readRefusingDatabaseUrl(
     file,
-    'The migration and the sync read that file, so pnpm dev:up would migrate that database and write every save to it.',
+    'The migration and the sync read that file, so pnpm db:migrate and pnpm sync:prod would use that database without being told to.',
   ))
 }
 

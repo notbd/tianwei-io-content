@@ -3,16 +3,15 @@
  * table against the /content directory, on the database DATABASE_URL
  * names. The deploy sets it from a secret; by hand it is typed for one
  * command (`DATABASE_URL=... pnpm sync:prod`). Without it the script
- * stops instead of syncing the local database.
+ * stops: there is no other database it could reach.
  */
 import process from 'node:process'
 import { createDb } from '../src/db.ts'
-import { loadLocalEnv, requireEnv } from '../src/env.ts'
+import { loadLocalEnv } from '../src/env.ts'
 import { messageOf } from '../src/errors.ts'
 import { syncPosts } from '../src/sync.ts'
 
 loadLocalEnv()
-requireEnv('DATABASE_URL')
 
 console.info('[sync-prod] Starting production sync...')
 const { db, pool } = createDb()

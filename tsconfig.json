@@ -16,6 +16,8 @@
     "forceConsistentCasingInFileNames": true,
     "isolatedModules": true,
     "verbatimModuleSyntax": true,
+    // Node runs the scripts directly: it strips types, so only erasable syntax
+    "erasableSyntaxOnly": true,
     "skipLibCheck": true
   },
   "include": ["drizzle", "src", "scripts", "tests", "drizzle.config.ts", "vitest.config.ts"],

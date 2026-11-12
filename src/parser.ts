@@ -138,16 +138,16 @@ const NON_EMPTY = 'expected a non-empty string'
 const XML_TEXT_ONLY = 'contains a character XML 1.0 forbids (it would break the RSS feed)'
 const NO_NUL = 'contains a NUL character (the database cannot store it)'
 
-const nonEmpty = z.string(NON_EMPTY).refine(text => text.trim() !== '', NON_EMPTY)
+const nonEmptySchema = z.string(NON_EMPTY).refine(text => text.trim() !== '', NON_EMPTY)
 
 /**
  * The authoring contract for frontmatter. Strict: an unknown key (say a
  * typo'd `updateAt`) fails the parse instead of being silently dropped.
  */
 const frontmatterSchema = z.strictObject({
-  title: nonEmpty.refine(isXmlText, XML_TEXT_ONLY),
+  title: nonEmptySchema.refine(isXmlText, XML_TEXT_ONLY),
   description: z.string('expected a string when present').refine(isXmlText, XML_TEXT_ONLY).optional(),
-  author: nonEmpty.refine(text => !hasNul(text), NO_NUL).max(AUTHOR_MAX_LENGTH, `exceeds ${AUTHOR_MAX_LENGTH} characters (varchar limit)`),
+  author: nonEmptySchema.refine(text => !hasNul(text), NO_NUL).max(AUTHOR_MAX_LENGTH, `exceeds ${AUTHOR_MAX_LENGTH} characters (varchar limit)`),
   // optional() lets an absent key reach the date parser, which names the problem
   createdAt: z.unknown().optional().transform(calendarDate),
   updatedAt: z.unknown().optional().transform((value, ctx) => value == null
@@ -187,10 +187,10 @@ export type ComponentRules = ReadonlyMap<string, { attributes: z.ZodType, childr
 type MdxNode = {
   type: string
   /** a JSX element's name; null for a fragment */
-  name?: string | null
-  children?: MdxNode[]
-  attributes?: { type: string, name?: string, value?: unknown }[]
-  position?: { start: { line: number } }
+  name?: string | null | undefined
+  children?: MdxNode[] | undefined
+  attributes?: { type: string, name?: string | undefined, value?: unknown }[] | undefined
+  position?: { start: { line: number } } | undefined
 }
 
 /**
@@ -282,7 +282,7 @@ function mdxBodyErrors(body: string, linesBeforeBody: number, components?: Compo
       errors.push(...elementErrors(node, where, components))
     node.children?.forEach(visit)
   }
-  visit(tree as MdxNode)
+  visit(tree)
   return errors
 }
 

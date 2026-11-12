@@ -24,37 +24,45 @@ const RECONCILE_ROUND_DELAY_MS = 5_000
  */
 const PRODUCTION_FRONTEND = 'https://tianwei.io'
 
-/** Where the frontend is, and the headers every request to it carries. */
-export type Frontend = {
-  url: URL
-  headers: Record<string, string>
+/**
+ * The frontend `check:contract` and `frontend:revalidate` talk to: the
+ * production one, unless FRONTEND_URL points them at a stack on this
+ * machine (say http://localhost:3000). The deploy workflow does not set it.
+ */
+export function frontendFromEnv(): URL {
+  const value = readEnv('FRONTEND_URL')
+  return value === undefined
+    ? new URL(PRODUCTION_FRONTEND)
+    : parseFrontendUrl(value)
 }
 
-const extraHeaders = z.record(z.string(), z.string())
+/** FRONTEND_URL as a URL; anything but an http(s) URL is refused, naming the variable. */
+function parseFrontendUrl(value: string): URL {
+  // `localhost:3000` parses, with `localhost:` as its scheme
+  const url = URL.canParse(value)
+    ? new URL(value)
+    : undefined
+  if (url === undefined || (url.protocol !== 'http:' && url.protocol !== 'https:'))
+    throw new Error(`FRONTEND_URL is not an http(s) URL: "${value}"`)
+  return url
+}
 
 /**
- * The production frontend, unless a local rehearsal points elsewhere:
- * FRONTEND_URL (say http://localhost:3000) and FRONTEND_EXTRA_HEADERS, a
- * JSON object of headers for every request (say a Vercel protection
- * bypass). The deploy workflow sets neither.
+ * The frontend `pnpm dev` revalidates after every sync: FRONTEND_URL, but
+ * only when its host is 127.0.0.1 or localhost. This is the one gate
+ * between the local watcher and the production frontend.
  */
-export function frontendFromEnv(): Frontend {
-  const url = new URL(readEnv('FRONTEND_URL') ?? PRODUCTION_FRONTEND)
-  const headersJson = readEnv('FRONTEND_EXTRA_HEADERS')
-  if (headersJson === undefined)
-    return { url, headers: {} }
-  try {
-    return {
-      url,
-      headers: extraHeaders.parse(JSON.parse(headersJson)),
-    }
-  }
-  catch {
-    throw new Error('[env] FRONTEND_EXTRA_HEADERS must be a JSON object of strings, such as {"x-vercel-protection-bypass":"..."}')
-  }
+export function localFrontendFromEnv(): URL | undefined {
+  const value = readEnv('FRONTEND_URL')
+  if (value === undefined)
+    return undefined
+  const url = parseFrontendUrl(value)
+  return url.hostname === '127.0.0.1' || url.hostname === 'localhost'
+    ? url
+    : undefined
 }
 
-const revalidatedPosts = z.object({
+const revalidatedPostsSchema = z.object({
   revalidated: z.array(z.string()),
 })
 
@@ -64,12 +72,11 @@ const revalidatedPosts = z.object({
  * a 200 whose `revalidated` lists `posts` fails the deploy; a 502 means the
  * read failed and nothing was expired.
  */
-export async function revalidateFrontend(frontend: Frontend, secret: string): Promise<unknown> {
-  const endpoint = new URL('/api/revalidate', frontend.url)
+export async function revalidateFrontend(frontend: URL, secret: string): Promise<unknown> {
+  const endpoint = new URL('/api/revalidate', frontend)
   const response = await fetch(endpoint, {
     method: 'POST',
     headers: {
-      ...frontend.headers,
       'content-type': 'application/json',
       'authorization': `Bearer ${secret}`,
     },
@@ -94,7 +101,7 @@ export async function revalidateFrontend(frontend: Frontend, secret: string): Pr
     throw new Error(`[revalidate] Non-JSON response (${response.status}) from ${endpoint.href}: ${rawBody.slice(0, 300)}`)
   }
 
-  const parsed = revalidatedPosts.safeParse(payload)
+  const parsed = revalidatedPostsSchema.safeParse(payload)
   if (!parsed.success || !parsed.data.revalidated.includes('posts'))
     throw new Error(`[revalidate] 200 without "posts" in revalidated: ${rawBody.slice(0, 300)}`)
 
@@ -113,20 +120,28 @@ const META_TAG = /<meta\b[^>]*>/gi
 const ATTRIBUTE = /([^\s"'<>/=]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'<>=`]+))/g
 
 /**
- * The content of the page's <meta name="post-body-sha256">, wherever the
- * tag is in the HTML (not only in <head>); undefined without one. Reads
- * that tag's attributes, never just any 64-digit hex on the page.
+ * The content of every <meta name="post-body-sha256"> on the page, wherever
+ * the tag is in the HTML (not only in <head>). A tag without a content
+ * attribute counts too, as ''. Reads the tags' attributes, never just any
+ * 64-digit hex on the page.
+ *
+ * It finds the tags in the text and does not parse HTML, so the same text
+ * inside a comment or a script counts as a tag. One of those next to the
+ * real tag fails the page, which must have exactly one. One of those alone,
+ * without a real tag, is compared with the expected hash and fails as well:
+ * to pass, the page would have to print the new body's correct hash there.
  */
-export function postBodyHashIn(html: string): string | undefined {
+export function postBodyHashesIn(html: string): string[] {
+  const hashes: string[] = []
   for (const [tag] of html.matchAll(META_TAG)) {
     const attributes = new Map(Array.from(tag.matchAll(ATTRIBUTE), ([, name = '', double, single, bare]) => [
       name.toLowerCase(),
       double ?? single ?? bare ?? '',
     ]))
     if (attributes.get('name') === POST_BODY_HASH_META)
-      return attributes.get('content')
+      hashes.push(attributes.get('content') ?? '')
   }
-  return undefined
+  return hashes
 }
 
 /** One request of a reconcile round and what its answer must be. */
@@ -151,17 +166,18 @@ export type ReconcileOptions = {
  * The content is parsed once, on entry, and every round compares against
  * that snapshot:
  * - the sitemap's /posts/<slug> pages are exactly the published posts;
- * - every page the sitemap lists answers 200, and each post page's
- *   post-body-sha256 equals the hash of the body synced here (a page that
- *   failed to re-render after the expiry keeps serving its previous
- *   version with a 200, which only the hash tells apart);
+ * - every page the sitemap lists answers 200, and each post page has
+ *   exactly one post-body-sha256 tag, equal to the hash of the body synced
+ *   here (a page that failed to re-render after the expiry keeps serving
+ *   its previous version with a 200, which only the hash tells apart);
  * - /feed.xml and every published post's /opengraph-image answer 200;
  * - every draft's /posts/<slug> answers 404.
  * Every body is read to the end within the request's timeout. A round
- * collects every problem and ends when its last request has; with any
- * problem it is tried again after a pause, three rounds in all.
+ * collects every problem, a sitemap that cannot be read included, and ends
+ * when its last request has; with any problem it is tried again after a
+ * pause, three rounds in all.
  */
-export async function reconcile(frontend: Frontend, options: ReconcileOptions = {}): Promise<number> {
+export async function reconcile(frontend: URL, options: ReconcileOptions = {}): Promise<number> {
   const records = parseAllPosts(options.contentRoot ?? CONTENT_ROOT)
   const published = new Map(records
     .filter(record => record.isPublished)
@@ -189,15 +205,15 @@ export async function reconcile(frontend: Frontend, options: ReconcileOptions = 
 }
 
 async function reconcileRound(
-  frontend: Frontend,
+  frontend: URL,
   published: ReadonlyMap<string, string>,
   drafts: readonly string[],
   log: (line: string) => void,
 ): Promise<{ checked: number, failures: string[] }> {
-  const sitemapUrl = new URL('/sitemap.xml', frontend.url)
+  const sitemapUrl = new URL('/sitemap.xml', frontend)
   let sitemap: string
   try {
-    const page = await get(sitemapUrl, frontend, log)
+    const page = await get(sitemapUrl, log)
     if (page.status !== 200) {
       return {
         checked: 1,
@@ -216,8 +232,24 @@ async function reconcileRound(
   }
 
   // the sitemap holds canonical URLs; check the same paths on this frontend
-  const paths = Array.from(sitemap.matchAll(/<loc>([^<]+)<\/loc>/g), ([, loc = '']) => new URL(loc).pathname)
-  if (paths.length === 0) {
+  let pages: { path: string, postSlug: string | undefined }[]
+  try {
+    pages = Array.from(sitemap.matchAll(/<loc>([^<]+)<\/loc>/g), ([, loc = '']) => {
+      const path = new URL(loc).pathname
+      return {
+        path,
+        postSlug: postSlugOf(path),
+      }
+    })
+  }
+  catch (err) {
+    // an address that is no URL, or a slug that does not decode
+    return {
+      checked: 1,
+      failures: [`${sitemapUrl.href} lists an address that cannot be read: ${messageOf(err)}`],
+    }
+  }
+  if (pages.length === 0) {
     return {
       checked: 1,
       failures: [`${sitemapUrl.href} lists no pages`],
@@ -225,7 +257,7 @@ async function reconcileRound(
   }
 
   const failures: string[] = []
-  const listedPosts = new Set(paths.flatMap(path => postSlugOf(path) ?? []))
+  const listedPosts = new Set(pages.flatMap(page => page.postSlug ?? []))
   for (const slug of published.keys()) {
     if (!listedPosts.has(slug))
       failures.push(`${sitemapUrl.href} does not list /posts/${slug}, a published post`)
@@ -236,10 +268,10 @@ async function reconcileRound(
   }
 
   const checks: Check[] = [
-    ...paths.map((path): Check => ({
-      path,
+    ...pages.map((page): Check => ({
+      path: page.path,
       status: 200,
-      hash: published.get(postSlugOf(path) ?? ''),
+      hash: published.get(page.postSlug ?? ''),
     })),
     { path: '/feed.xml', status: 200 },
     ...Array.from(published.keys(), (slug): Check => ({ path: `/posts/${slug}/opengraph-image`, status: 200 })),
@@ -259,11 +291,11 @@ async function reconcileRound(
 }
 
 /** What is wrong with one check's answer, if anything. Never throws. */
-async function runCheck(frontend: Frontend, check: Check, log: (line: string) => void): Promise<string | undefined> {
-  const url = new URL(check.path, frontend.url)
+async function runCheck(frontend: URL, check: Check, log: (line: string) => void): Promise<string | undefined> {
+  const url = new URL(check.path, frontend)
   let page: Fetched
   try {
-    page = await get(url, frontend, log)
+    page = await get(url, log)
   }
   catch (err) {
     return requestFailure(url, err)
@@ -277,9 +309,12 @@ async function runCheck(frontend: Frontend, check: Check, log: (line: string) =>
       : `${url.href} answered ${page.status}, expected 200`
   }
   if (check.hash !== undefined) {
-    const shown = postBodyHashIn(new TextDecoder().decode(page.body))
-    if (shown !== check.hash)
-      return `${url.href} still shows a previous version: expected ${POST_BODY_HASH_META} ${check.hash}, the page has ${shown ?? 'no such meta tag'}`
+    const shown = postBodyHashesIn(new TextDecoder().decode(page.body))
+    const [hash] = shown
+    if (shown.length !== 1)
+      return `${url.href} has ${shown.length} ${POST_BODY_HASH_META} meta tags, expected exactly one`
+    if (hash !== check.hash)
+      return `${url.href} still shows a previous version: expected ${POST_BODY_HASH_META} ${check.hash}, the page has ${hash}`
   }
   return undefined
 }
@@ -289,10 +324,9 @@ type Fetched = {
   body: ArrayBuffer
 }
 
-/** GET with the frontend's headers, reading the whole body within the timeout, logged. */
-async function get(url: URL, frontend: Frontend, log: (line: string) => void): Promise<Fetched> {
+/** GET, reading the whole body within the timeout, logged. */
+async function get(url: URL, log: (line: string) => void): Promise<Fetched> {
   const response = await fetch(url, {
-    headers: frontend.headers,
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   })
   const body = await response.arrayBuffer()
