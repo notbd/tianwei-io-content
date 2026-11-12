@@ -94,12 +94,10 @@ function stopIfRequested(): void {
 const held: { what: string, release: () => Promise<void> | void }[] = []
 /** What the main flow is doing, for the line a signal prints. */
 let step = 'starting'
-/** Holding the stack for --keep: a signal now ends a run that passed. */
-let holding = false
-/** Set when the cleanup starts: a child that ends after this was ended by it. */
-let cleaningUp = false
-/** Process groups that outlived SIGKILL; with any, the lock stays. */
-const survivors: string[] = []
+/** The signal that asked for the stop, when a signal was the first to ask. */
+let interruptedBy: NodeJS.Signals | undefined
+/** A process group outlived SIGKILL: the lock stays, since the group may still use WEB_DIR's .next. */
+let groupLeftBehind = false
 
 // A closed terminal makes writes to these fail later, as an event: with
 // no listener that is an uncaught exception in the middle of the cleanup.
@@ -114,6 +112,7 @@ for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) {
   process.on(signal, () => {
     if (stopping.signal.aborted)
       return
+    interruptedBy = signal
     say(`Received ${signal} while ${step}; stopping`)
     requestStop(`received ${signal}`)
   })
@@ -262,9 +261,9 @@ function start(name: string, cwd: string, command: string, args: string[], env: 
 
   spawned.on('exit', (code, signal) => {
     child.ended = describeExit(code, signal)
-    // the build's end is judged where the build is awaited; an end during
-    // the cleanup is the cleanup's doing
-    if (!endsByItself && !cleaningUp)
+    // The build's end is judged where the build is awaited. An end during
+    // the cleanup asks for a stop too, which nobody reads by then.
+    if (!endsByItself)
       requestStop(`${name} ended unexpectedly (${child.ended})`)
   })
   return child
@@ -310,8 +309,10 @@ async function stopGroup(child: Child): Promise<void> {
     if (!await groupGone(child.group, GROUP_TERM_WAIT_MS)) {
       signalGroup(child.group, 'SIGKILL')
       sent = 'TERM, then KILL'
-      if (!await groupGone(child.group, GROUP_KILL_WAIT_MS))
-        survivors.push(`${child.name} (process group ${child.group})`)
+      if (!await groupGone(child.group, GROUP_KILL_WAIT_MS)) {
+        groupLeftBehind = true
+        throw new Error(`process group ${child.group} is still there after SIGKILL`)
+      }
     }
   }
   // the exit event may come a moment after the group is gone
@@ -327,8 +328,7 @@ async function releaseEarly(child: Child): Promise<void> {
     held.splice(index, 1)
   await stopGroup(child)
   // the lock still lists the group: a later refusal must not send anyone after its number
-  if (!groupExists(child.group))
-    note(`released ${child.group}`)
+  note(`released ${child.group}`)
 }
 
 /** How the child ended. Interrupted by a stop request; fails after `ms`. */
@@ -726,7 +726,6 @@ async function run(temporary: string): Promise<void> {
     return
 
   step = 'holding the stack (--keep)'
-  holding = true
   say('Holding the stack until interrupted (Ctrl-C):')
   say(`  database: postgresql://local@127.0.0.1:${databasePort}/local`)
   say(`  API:      ${api}`)
@@ -734,26 +733,27 @@ async function run(temporary: string): Promise<void> {
   say(`  REVALIDATION_SECRET: ${revalidationSecret}`)
   say(`  PREVIEW_SECRET: ${previewSecret}`)
   say(`  the draft: ${draftSlug}`)
-  // ends by rejecting when the stop is requested
-  await sleep(2 ** 31 - 1, undefined, { signal: stopping.signal })
+  // A signal is how a held run ends, and it passed. Any other stop request (a child ended) fails it.
+  await sleep(2 ** 31 - 1, undefined, { signal: stopping.signal }).catch(() => {})
+  if (interruptedBy === undefined)
+    stopIfRequested()
 }
 
 /** Releases everything held, newest first, and says how the run went. Runs once, from the `finally`. */
 async function cleanUp(failure: string | undefined): Promise<number> {
-  cleaningUp = true
+  // run() returned: every scenario passed, and a stack held for --keep was ended by a signal
+  const passed = failure === undefined
+  // read now: the children this stops ask for a stop as they end
   const stopped = stopping.signal.aborted
     ? String(stopping.signal.reason)
     : undefined
-  const bySignalWhileHolding = holding && stopped !== undefined && stopped.startsWith('received SIG')
-  const passed = (failure === undefined && stopped === undefined) || bySignalWhileHolding
-  const interrupted = stopped !== undefined && stopped.startsWith('received SIG')
-  const reason = stopped ?? (failure === undefined
+  const reason = stopped ?? (passed
     ? 'every scenario passed'
     : `failed while ${step}: ${failure}`)
   say(`Cleaning up: ${reason}`)
 
   // a failed run shows what the children said; CI has no temporary files to look at
-  if (!passed && !interrupted) {
+  if (!passed && interruptedBy === undefined) {
     for (const child of children) {
       say(`The last ${child.tail.length} lines of ${child.name}:`)
       for (const line of child.tail)
@@ -827,10 +827,8 @@ try {
       what: 'the lock',
       release: () => {
         fs.closeSync(lockDescriptor)
-        if (survivors.length > 0) {
-          say(`These process groups are still there after SIGKILL, so the lock stays: ${survivors.join(', ')}`)
-          throw new Error('process groups left behind')
-        }
+        if (groupLeftBehind)
+          throw new Error('a process group is still there after SIGKILL, so the lock stays')
         fs.rmSync(lockPath)
       },
     })
