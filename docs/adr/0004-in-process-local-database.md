@@ -34,9 +34,8 @@ process serves it over the protocol the API's driver speaks.
 - `serveNeonHttp()` serves it on `127.0.0.1` over Neon's HTTP protocol.
   The API's connector sends a `DATABASE_URL` whose host is `127.0.0.1`
   or `localhost` to that endpoint over plain HTTP and leaves every other
-  host to the driver. The API's
-  queries, driver and Workers runtime are the production ones; only the
-  far end of the HTTP request differs.
+  host to the driver. The API's queries, driver and Workers runtime are
+  the production ones; only the far end of the HTTP request differs.
 - The database is rebuilt from the files in `content/` on every start.
   The files are the source of truth, so there is nothing to keep.
 - Docker, `docker-compose.yml`, the `LOCAL_*` variables and the eight
