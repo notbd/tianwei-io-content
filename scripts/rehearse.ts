@@ -207,13 +207,12 @@ function describeExit(code: number | null, signal: NodeJS.Signals | null): strin
 }
 
 /**
- * Starts a child in its own process group, bound to the ports named, and
- * holds it. Its three `error` sources (the process and its two output
+ * Starts a child in its own process group and holds it. Its three `error` sources (the process and its two output
  * streams, which are separate objects) get their listeners in the turn it
  * is spawned: a command that does not exist reports that one turn later,
  * and an error nobody listens to is an uncaught exception.
  */
-function start(name: string, cwd: string, command: string, args: string[], env: NodeJS.ProcessEnv, ports: number[], endsByItself = false): Child {
+function start(name: string, cwd: string, command: string, args: string[], env: NodeJS.ProcessEnv, endsByItself = false): Child {
   const spawned = spawn(command, args, {
     cwd,
     env,
@@ -242,13 +241,7 @@ function start(name: string, cwd: string, command: string, args: string[], env: 
   })
   children.push(child)
   note(`group ${child.group} ${name}`)
-  for (const port of ports)
-    note(`port ${port} ${name}`)
-  say(`Started ${name}: pid ${child.group}, process group ${child.group}${ports.length === 0
-    ? ''
-    : `, port${ports.length === 1
-      ? ''
-      : 's'} ${ports.join(' and ')}`}`)
+  say(`Started ${name}: pid ${child.group}, process group ${child.group}`)
 
   // Lines are cut here, not by readline: its Interface re-emits the
   // stream's errors from itself, one more object to listen on.
@@ -510,7 +503,6 @@ async function run(temporary: string): Promise<void> {
   if (typeof endpointAddress !== 'object' || endpointAddress === null)
     throw new Error('The database endpoint has no port')
   const databasePort = endpointAddress.port
-  note(`port ${databasePort} database`)
   say(`Database endpoint: port ${databasePort}`)
   stopIfRequested()
 
@@ -518,6 +510,8 @@ async function run(temporary: string): Promise<void> {
   const apiPort = await freePort()
   const inspectorPort = await freePort()
   const webPort = await freePort()
+  // printed here: the inspector's appears nowhere else, and the "ready" lines only once a service answers
+  say(`Ports: API ${apiPort}, inspector ${inspectorPort}, frontend ${webPort}`)
   stopIfRequested()
   const api = `http://127.0.0.1:${apiPort}`
   const web = new URL(`http://127.0.0.1:${webPort}`)
@@ -552,7 +546,7 @@ async function run(temporary: string): Promise<void> {
     emptyEnvFile,
     '--persist-to',
     path.join(temporary, 'wrangler'),
-  ], { ...process.env, CLOUDFLARE_INCLUDE_PROCESS_ENV: 'false', WRANGLER_SEND_METRICS: 'false' }, [apiPort, inspectorPort])
+  ], { ...process.env, CLOUDFLARE_INCLUDE_PROCESS_ENV: 'false', WRANGLER_SEND_METRICS: 'false' })
   const publishedSlugs = () => records().filter(record => record.isPublished).map(record => record.slug).toSorted()
   const apiSlugs = async (): Promise<string[]> => {
     const { status, body } = await get(`${api}/api/posts`)
@@ -581,7 +575,7 @@ async function run(temporary: string): Promise<void> {
   // with it a build reads nothing from the API
   fs.rmSync(path.join(webDir, '.next/cache/fetch-cache'), { recursive: true, force: true })
   const buildStarted = performance.now()
-  const build = start('build', webDir, 'node_modules/.bin/next', ['build'], webEnv, [], true)
+  const build = start('build', webDir, 'node_modules/.bin/next', ['build'], webEnv, true)
   const buildEnd = await ended(build, BUILD_TIMEOUT_MS)
   // Released now rather than in the cleanup: once its group is empty, the
   // number may be given to another process while the stack is held.
@@ -598,7 +592,7 @@ async function run(temporary: string): Promise<void> {
     String(webPort),
     '-H',
     '127.0.0.1',
-  ], webEnv, [webPort])
+  ], webEnv)
   await ready('The frontend', async () => (await get(new URL('/contract.json', web))).status === 200)
   stopIfRequested()
   say(`Frontend ready: ${browserAddress}`)
