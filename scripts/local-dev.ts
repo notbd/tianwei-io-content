@@ -39,7 +39,15 @@ const server = await serveNeonHttp(client, PORT, (err) => {
 })
 console.info(`[dev] Database ready. The API reads it with DATABASE_URL=postgresql://local@127.0.0.1:${PORT}/local`)
 
-const frontend = localFrontendFromEnv()
+let frontend: URL | undefined
+try {
+  frontend = localFrontendFromEnv()
+}
+catch (err) {
+  // the database is in memory: nothing to release but the process
+  console.error('[dev]', messageOf(err))
+  process.exit(1)
+}
 const secret = readEnv('REVALIDATION_SECRET')
 function revalidateLocalFrontend() {
   if (frontend === undefined || secret === undefined)

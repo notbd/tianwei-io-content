@@ -44,6 +44,11 @@ describe('localFrontendFromEnv', () => {
     vi.stubEnv('FRONTEND_URL', value)
     expect(localFrontendFromEnv()).toBeUndefined()
   })
+
+  it('names the variable when it is not a URL, such as an address without http://', () => {
+    vi.stubEnv('FRONTEND_URL', '127.0.0.1:3000')
+    expect(() => localFrontendFromEnv()).toThrow('FRONTEND_URL is not a URL: "127.0.0.1:3000"')
+  })
 })
 
 describe('revalidateFrontend', () => {
