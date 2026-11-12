@@ -45,6 +45,7 @@ import os from 'node:os'
 import path from 'node:path'
 import process from 'node:process'
 import { setTimeout as sleep } from 'node:timers/promises'
+import { z } from 'zod'
 import { CONTENT_ROOT } from '../src/config.ts'
 import { checkContent, fetchContract } from '../src/contract.ts'
 import { readEnv } from '../src/env.ts'
@@ -69,6 +70,18 @@ const keep = process.argv.includes('--keep')
 const apiDir = path.resolve(readEnv('API_DIR') ?? '../tianwei-io-api')
 const webDir = path.resolve(readEnv('WEB_DIR') ?? '../tianwei.io')
 const lockPath = path.join(webDir, '.next/cache/rehearse.lock')
+
+// what the scenarios read of the API's two answers
+const postListSchema = z.object({
+  data: z.array(z.object({
+    slug: z.string(),
+  })),
+})
+const postSchema = z.object({
+  data: z.object({
+    content: z.string(),
+  }),
+})
 
 const say = (line: string) => console.info(`[rehearse] ${line}`)
 
@@ -534,13 +547,7 @@ async function run(temporary: string): Promise<void> {
     const { status, body } = await get(`${api}/api/posts`)
     if (status !== 200)
       throw new Error(`${api}/api/posts answered ${status}`)
-    const list: unknown = JSON.parse(body)
-    const data = typeof list === 'object' && list !== null && 'data' in list && Array.isArray(list.data)
-      ? list.data
-      : []
-    return data.flatMap((post: unknown) => typeof post === 'object' && post !== null && 'slug' in post && typeof post.slug === 'string'
-      ? [post.slug]
-      : []).toSorted()
+    return postListSchema.parse(JSON.parse(body)).data.map(post => post.slug).toSorted()
   }
   await ready('The API', async () => (await apiSlugs()).join() === publishedSlugs().join())
   stopIfRequested()
@@ -613,13 +620,10 @@ async function run(temporary: string): Promise<void> {
     expectEqual(`/posts/${slug} hash tags`, hashes.length, 1)
     return hashes[0] ?? ''
   }
-  const apiBody = async (slug: string): Promise<unknown> => {
+  const apiBody = async (slug: string): Promise<string> => {
     const { status, body } = await get(`${api}/api/post/${slug}`)
     expectEqual(`${api}/api/post/${slug} status`, status, 200)
-    const post: unknown = JSON.parse(body)
-    return typeof post === 'object' && post !== null && 'data' in post && typeof post.data === 'object' && post.data !== null && 'content' in post.data
-      ? post.data.content
-      : undefined
+    return postSchema.parse(JSON.parse(body)).data.content
   }
   /** The problems a failed reconcile lists, one per line of its error. */
   const problems = (error: string) => error.split('\n').filter(line => line.startsWith('  - '))
@@ -783,27 +787,12 @@ async function cleanUp(failure: string | undefined): Promise<number> {
 // still reaches the cleanup.
 // --------------------------------------------------------------------------
 
-/** Whether the package.json at `file` lists next among its dependencies. */
-function dependsOnNext(file: string): boolean {
-  if (!fs.existsSync(file))
-    return false
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(fs.readFileSync(file, 'utf8'))
-  }
-  catch (err) {
-    throw new Error(`${file} is not valid JSON: ${messageOf(err)}`)
-  }
-  return typeof parsed === 'object' && parsed !== null
-    && 'dependencies' in parsed && typeof parsed.dependencies === 'object' && parsed.dependencies !== null
-    && 'next' in parsed.dependencies
-}
-
 let failure: string | undefined
 let refused = false
 try {
-  if (!dependsOnNext(path.join(webDir, 'package.json')))
-    throw new Error(`WEB_DIR (${webDir}) is not a checkout of the frontend: no package.json that depends on next`)
+  // the file the build and the frontend are started from
+  if (!fs.existsSync(path.join(webDir, 'node_modules/.bin/next')))
+    throw new Error(`WEB_DIR (${webDir}) is not a checkout of the frontend with its dependencies installed: it has no node_modules/.bin/next`)
   fs.mkdirSync(path.dirname(lockPath), { recursive: true })
 
   let lock: number | undefined
