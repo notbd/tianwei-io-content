@@ -33,7 +33,7 @@ All writes go through a single entry point, `src/sync.ts#syncPosts`:
 - **One writer at a time.** The transaction's first statement takes
   `pg_advisory_xact_lock` on a fixed key (`SYNC_LOCK_KEY`), so a second
   sync (a manual `sync:prod` overlapping a deploy, or the local watcher)
-  waits for the first to commit and then diffs against the committed
+  waits for the first to commit and then writes over the committed
   rows. Transaction-scoped rather than session-scoped: commit or rollback
   always releases it, and it works through Neon's transaction-mode pooler.
 - **Empty-site guard.** A run that would leave no published post (no
