@@ -223,7 +223,7 @@ describe('serveNeonHttp', () => {
       .toEqual({ status: 404, body: undefined })
   })
 
-  it('is a 404 for any method but POST, and runs nothing', async () => {
+  it('is a 404 with an empty body for any method but POST', async () => {
     const response = await fetch(`http://127.0.0.1:${port}/sql`, {
       method: 'PUT',
       headers: DRIVER_HEADER,
