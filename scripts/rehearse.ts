@@ -45,6 +45,7 @@ import process from 'node:process'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { CONTENT_ROOT } from '../src/config.ts'
 import { checkContent, fetchContract } from '../src/contract.ts'
+import { readEnv } from '../src/env.ts'
 import { messageOf } from '../src/errors.ts'
 import { postBodyHash, postBodyHashesIn, reconcile, revalidateFrontend } from '../src/frontend.ts'
 import { openLocalDb, serveNeonHttp } from '../src/localDb.ts'
@@ -66,8 +67,8 @@ const LOG_TAIL_LINES = 50
 const RECONCILE_ROUND_DELAY_MS = 1_000
 
 const keep = process.argv.includes('--keep')
-const apiDir = path.resolve(process.env.API_DIR ?? '../tianwei-io-api')
-const webDir = path.resolve(process.env.WEB_DIR ?? '../tianwei.io')
+const apiDir = path.resolve(readEnv('API_DIR') ?? '../tianwei-io-api')
+const webDir = path.resolve(readEnv('WEB_DIR') ?? '../tianwei.io')
 const lockPath = path.join(webDir, '.next/cache/rehearse.lock')
 
 const say = (line: string) => console.info(`[rehearse] ${line}`)
@@ -179,8 +180,12 @@ function refuse(): void {
   const pid = positiveInteger(pidText)
   say(`Refused: ${lockPath} exists. It records pid ${pid ?? `"${pidText}" (not a pid)`}.`)
 
-  const leftover = () => {
-    say('The lock was left behind. Do not kill that pid. What it recorded:')
+  // `confirmed` is false when the pid could not be checked: then this
+  // follows the instructions to check it, and must not contradict them
+  const leftover = (confirmed: boolean) => {
+    say(confirmed
+      ? 'The lock was left behind. Do not kill that pid. What it recorded:'
+      : 'What the lock recorded:')
     // one ps for every group
     const everyProcess = probe('ps', ['-A', '-o', 'pgid=,pid=,args='])
     const psCommand = 'ps -A -o pgid=,pid=,args='
@@ -233,7 +238,7 @@ function refuse(): void {
   }
 
   if (pid === undefined || !isAlive(pid)) {
-    leftover()
+    leftover(true)
     return
   }
   const whoArgs = [
@@ -247,11 +252,11 @@ function refuse(): void {
     if (who.stdout.includes('scripts/rehearse.ts'))
       running()
     else
-      leftover()
+      leftover(true)
   }
   else if (who.ok && who.status === 1) {
     // gone between the two looks
-    leftover()
+    leftover(true)
   }
   else {
     const why = who.ok
@@ -261,7 +266,7 @@ function refuse(): void {
     say('  How to read it: with scripts/rehearse.ts in the output, a rehearsal is running. With other output, or with none and exit code 1 (that pid is gone), the lock was left behind. If the command hangs, is interrupted or fails another way, run it again; that does not make the lock a leftover.')
     say(`  Until you know: do not delete the lock, do not kill any process, and send no signal to pid ${pid}. To run now, point WEB_DIR at another checkout.`)
     say('  Only once you know the lock was left behind, follow this:')
-    leftover()
+    leftover(false)
   }
 }
 
@@ -331,20 +336,20 @@ function start(name: string, cwd: string, command: string, args: string[], env: 
     stdio: ['ignore', 'pipe', 'pipe'],
     detached: true,
   })
-  const child: Child = {
-    name,
-    process: spawned,
-    group: spawned.pid ?? 0,
-    tail: [],
-    endsByItself,
-  }
   spawned.on('error', err => requestStop(`the ${name} process failed: ${messageOf(err)}`))
   spawned.stdout.on('error', err => requestStop(`the standard output of ${name} failed: ${messageOf(err)}`))
   spawned.stderr.on('error', err => requestStop(`the standard error of ${name} failed: ${messageOf(err)}`))
   if (spawned.pid === undefined) {
     // nothing to hold: it never ran
     requestStop(`${name} could not start (${command} in ${cwd})`)
-    stopIfRequested()
+    throw new Error(String(stopping.signal.reason))
+  }
+  const child: Child = {
+    name,
+    process: spawned,
+    group: spawned.pid,
+    tail: [],
+    endsByItself,
   }
 
   held.push({
@@ -432,6 +437,14 @@ async function stopGroup(child: Child): Promise<void> {
   say(`Stopped ${child.name}: sent ${sent} to process group ${child.group}; it ended with ${child.ended ?? 'no exit reported yet'}`)
 }
 
+/** Stops one child now, ahead of the cleanup, and takes it off `held`. */
+async function releaseEarly(child: Child): Promise<void> {
+  const index = held.findIndex(entry => entry.what === child.name)
+  if (index !== -1)
+    held.splice(index, 1)
+  await stopGroup(child)
+}
+
 /** How the child ended. Interrupted by a stop request; fails after `ms`. */
 async function ended(child: Child, ms: number): Promise<string> {
   for (const end = performance.now() + ms; child.ended === undefined;) {
@@ -513,6 +526,9 @@ async function failureOf(what: string, run: () => Promise<unknown>): Promise<str
     await run()
   }
   catch (err) {
+    // the steps that must fail run the deploy's own code, which takes no
+    // abort signal: a stop that came meanwhile takes effect here
+    stopIfRequested()
     return messageOf(err)
   }
   throw new Error(`${what} passed, but it must fail`)
@@ -559,10 +575,14 @@ async function run(temporary: string): Promise<void> {
     return target.content + suffix
   }
 
+  // The deploy's own functions take no abort signal, so each of their calls
+  // runs to its end and the stop request is looked at right after it.
   step = 'the first sync'
-  const sync = async () => syncPosts(db, { contentRoot })
+  const sync = async () => {
+    await syncPosts(db, { contentRoot })
+    stopIfRequested()
+  }
   await sync()
-  stopIfRequested()
 
   step = 'starting the database endpoint'
   const onEndpointError = (err: Error) => requestStop(`the database endpoint failed: ${messageOf(err)}`)
@@ -649,6 +669,9 @@ async function run(temporary: string): Promise<void> {
   const buildStarted = performance.now()
   const build = start('build', webDir, 'node_modules/.bin/next', ['build'], webEnv, [], true)
   const buildEnd = await ended(build, BUILD_TIMEOUT_MS)
+  // Released now rather than in the cleanup: once its group is empty, the
+  // number may be given to another process while the stack is held.
+  await releaseEarly(build)
   stopIfRequested()
   if (buildEnd !== 'exit code 0')
     throw new Error(`next build failed (${buildEnd})`)
@@ -670,12 +693,22 @@ async function run(temporary: string): Promise<void> {
   // The scenarios. A step that must fail has to fail for the reason
   // written here; any other error fails the run.
   // ------------------------------------------------------------------
-  const revalidate = async () => revalidateFrontend(web, revalidationSecret)
-  const reconcileNow = async () => reconcile(web, {
-    contentRoot,
-    roundDelayMs: RECONCILE_ROUND_DELAY_MS,
-    log: () => {},
-  })
+  const revalidate = async () => {
+    await revalidateFrontend(web, revalidationSecret)
+    stopIfRequested()
+  }
+  const reconcileNow = async () => {
+    await reconcile(web, {
+      contentRoot,
+      roundDelayMs: RECONCILE_ROUND_DELAY_MS,
+      log: () => {},
+    })
+    stopIfRequested()
+  }
+  const contractCheck = async () => {
+    checkContent(await fetchContract(web), contentRoot)
+    stopIfRequested()
+  }
   const page = async (slug: string) => {
     const { status, body } = await get(new URL(`/posts/${slug}`, web))
     return {
@@ -711,9 +744,7 @@ async function run(temporary: string): Promise<void> {
   let baselineHash = ''
   let liveHash = ''
 
-  await scenario('contract', async () => {
-    checkContent(await fetchContract(web), contentRoot)
-  })
+  await scenario('contract', contractCheck)
 
   await scenario('baseline', async () => {
     await sync()
@@ -759,12 +790,14 @@ async function run(temporary: string): Promise<void> {
       endpoint.close(() => resolve())
       endpoint.closeAllConnections()
     })
+    stopIfRequested()
     const error = await failureOf('the revalidation', revalidate)
     if (!error.includes('could not read the API, so it expired nothing') || !error.includes('(502)'))
       throw new Error(`The revalidation must fail with the frontend's 502, but it said:\n${error}`)
     expectEqual('the page while the API cannot read', await shownHash(target.slug), liveHash)
     // the same port: the API was started with it. Not getting it back fails the run.
     endpoint = await serveNeonHttp(client, databasePort, onEndpointError)
+    stopIfRequested()
     // nothing was expired, so nothing is read again
     expectEqual('the page once the API can read again', await shownHash(target.slug), liveHash)
   })
@@ -772,7 +805,7 @@ async function run(temporary: string): Promise<void> {
   await scenario('a render failure the contract does not see', async () => {
     edit('\n```ts {1-99999999}\nconst rehearsal = true\n```\n')
     await sync()
-    checkContent(await fetchContract(web), contentRoot)
+    await contractCheck()
     await revalidate()
     const error = await failureOf('the reconcile', reconcileNow)
     const found = problems(error)
@@ -800,7 +833,10 @@ async function run(temporary: string): Promise<void> {
   say('Holding the stack until interrupted (Ctrl-C):')
   say(`  database: postgresql://local@127.0.0.1:${databasePort}/local`)
   say(`  API:      ${api}`)
-  say(`  frontend: ${web.origin}`)
+  // localhost, not 127.0.0.1: Next rewrites 127.0.0.1 to localhost in
+  // request.url, so the draft preview's redirect lands on localhost, and a
+  // browser that began on 127.0.0.1 would not send its draft cookie there
+  say(`  frontend: http://localhost:${webPort}`)
   say(`  REVALIDATION_SECRET: ${revalidationSecret}`)
   say(`  PREVIEW_SECRET: ${previewSecret}`)
   say(`  the draft: ${draftSlug}`)
@@ -855,11 +891,20 @@ async function cleanUp(failure: string | undefined): Promise<number> {
 // still reaches the cleanup.
 // --------------------------------------------------------------------------
 
+/** Whether the package.json at `file` lists next among its dependencies. */
+function dependsOnNext(file: string): boolean {
+  if (!fs.existsSync(file))
+    return false
+  const parsed: unknown = JSON.parse(fs.readFileSync(file, 'utf8'))
+  return typeof parsed === 'object' && parsed !== null
+    && 'dependencies' in parsed && typeof parsed.dependencies === 'object' && parsed.dependencies !== null
+    && 'next' in parsed.dependencies
+}
+
 let failure: string | undefined
 let refused = false
 try {
-  const webPackage = path.join(webDir, 'package.json')
-  if (!fs.existsSync(webPackage) || !fs.readFileSync(webPackage, 'utf8').includes('"next"'))
+  if (!dependsOnNext(path.join(webDir, 'package.json')))
     throw new Error(`WEB_DIR (${webDir}) is not a checkout of the frontend: no package.json that depends on next`)
   fs.mkdirSync(path.dirname(lockPath), { recursive: true })
 
