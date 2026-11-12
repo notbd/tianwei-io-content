@@ -27,9 +27,9 @@
  * the run holds is released in one place, the `finally` of the outermost
  * `try`, in the reverse order it was taken, with one exception: the
  * build's process group is released as soon as the build ends, since its
- * number may be given to another process while the stack is held. A step that calls the deploy's
- * own functions (sync, contract check, revalidate, reconcile) is not
- * interrupted; the stop takes effect when it returns.
+ * number may be given to another process while the stack is held. A step
+ * that calls the deploy's own functions (sync, contract check, revalidate,
+ * reconcile) is not interrupted; the stop takes effect when it returns.
  *
  * --keep holds the stack after every scenario passed, and prints its
  * addresses and secrets, until interrupted.
@@ -97,6 +97,8 @@ function stopIfRequested(): void {
 const held: { what: string, release: () => Promise<void> | void }[] = []
 /** What the main flow is doing, for the line a signal prints. */
 let step = 'starting'
+/** True while a call into the deploy's own code runs: it takes no abort signal. */
+let deploying = false
 /** Holding the stack for --keep: a signal now ends a run that passed. */
 let holding = false
 /** Set when the cleanup starts: a child that ends after this was ended by it. */
@@ -117,8 +119,7 @@ for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) {
   process.on(signal, () => {
     if (stopping.signal.aborted)
       return
-    // only a scenario calls the deploy's own code, which is not interrupted
-    const finishesFirst = step.startsWith('running ')
+    const finishesFirst = deploying
       ? ' (a step that runs the deploy\'s own code finishes first)'
       : ''
     say(`Received ${signal} while ${step}; stopping${finishesFirst}`)
@@ -183,11 +184,9 @@ function refuse(): void {
   }
   const lines = text.split('\n').filter(line => line !== '')
   // groups the run released before it ended (the build's): not to be looked for
-  const released = new Set(lines.flatMap(line => line.startsWith('released ')
-    ? [
-        line.slice('released '.length),
-      ]
-    : []))
+  const released = new Set(lines
+    .filter(line => line.startsWith('released '))
+    .map(line => line.slice('released '.length)))
   const pidText = lines.find(line => line.startsWith('pid '))?.slice('pid '.length) ?? ''
   const pid = positiveInteger(pidText)
   say(`Refused: ${lockPath} exists. It records pid ${pid ?? `"${pidText}" (not a pid)`}.`)
@@ -548,6 +547,17 @@ async function ready(what: string, isReady: () => Promise<boolean>): Promise<voi
 // The run
 // --------------------------------------------------------------------------
 
+/** Runs a call into the deploy's own code, marked for the line a signal prints. */
+async function deployStep<T>(call: () => Promise<T>): Promise<T> {
+  deploying = true
+  try {
+    return await call()
+  }
+  finally {
+    deploying = false
+  }
+}
+
 /** The error of a step that must fail; any step that passes instead fails the run. */
 async function failureOf(what: string, run: () => Promise<unknown>): Promise<string> {
   try {
@@ -607,7 +617,7 @@ async function run(temporary: string): Promise<void> {
   // runs to its end and the stop request is looked at right after it.
   step = 'running the first sync'
   const sync = async () => {
-    await syncPosts(db, { contentRoot })
+    await deployStep(async () => syncPosts(db, { contentRoot }))
     stopIfRequested()
   }
   await sync()
@@ -727,19 +737,19 @@ async function run(temporary: string): Promise<void> {
   // written here; any other error fails the run.
   // ------------------------------------------------------------------
   const revalidate = async () => {
-    await revalidateFrontend(web, revalidationSecret)
+    await deployStep(async () => revalidateFrontend(web, revalidationSecret))
     stopIfRequested()
   }
   const reconcileNow = async () => {
-    await reconcile(web, {
+    await deployStep(async () => reconcile(web, {
       contentRoot,
       roundDelayMs: RECONCILE_ROUND_DELAY_MS,
       log: () => {},
-    })
+    }))
     stopIfRequested()
   }
   const contractCheck = async () => {
-    checkContent(await fetchContract(web), contentRoot)
+    await deployStep(async () => checkContent(await fetchContract(web), contentRoot))
     stopIfRequested()
   }
   const page = async (slug: string) => {
