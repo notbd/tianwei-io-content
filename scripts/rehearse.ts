@@ -94,8 +94,6 @@ function stopIfRequested(): void {
 const held: { what: string, release: () => Promise<void> | void }[] = []
 /** What the main flow is doing, for the line a signal prints. */
 let step = 'starting'
-/** True while a call into the deploy's own code runs: it takes no abort signal. */
-let deploying = false
 /** Holding the stack for --keep: a signal now ends a run that passed. */
 let holding = false
 /** Set when the cleanup starts: a child that ends after this was ended by it. */
@@ -116,10 +114,7 @@ for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) {
   process.on(signal, () => {
     if (stopping.signal.aborted)
       return
-    const finishesFirst = deploying
-      ? ' (a step that runs the deploy\'s own code finishes first)'
-      : ''
-    say(`Received ${signal} while ${step}; stopping${finishesFirst}`)
+    say(`Received ${signal} while ${step}; stopping`)
     requestStop(`received ${signal}`)
   })
 }
@@ -411,17 +406,6 @@ async function ready(what: string, isReady: () => Promise<boolean>): Promise<voi
 // The run
 // --------------------------------------------------------------------------
 
-/** Runs a call into the deploy's own code, marked for the line a signal prints. */
-async function deployStep<T>(call: () => Promise<T>): Promise<T> {
-  deploying = true
-  try {
-    return await call()
-  }
-  finally {
-    deploying = false
-  }
-}
-
 /** The error of a step that must fail; any step that passes instead fails the run. */
 async function failureOf(what: string, run: () => Promise<unknown>): Promise<string> {
   try {
@@ -481,7 +465,7 @@ async function run(temporary: string): Promise<void> {
   // runs to its end and the stop request is looked at right after it.
   step = 'running the first sync'
   const sync = async () => {
-    await deployStep(async () => syncPosts(db, { contentRoot }))
+    await syncPosts(db, { contentRoot })
     stopIfRequested()
   }
   await sync()
@@ -602,19 +586,19 @@ async function run(temporary: string): Promise<void> {
   // written here; any other error fails the run.
   // ------------------------------------------------------------------
   const revalidate = async () => {
-    await deployStep(async () => revalidateFrontend(web, revalidationSecret))
+    await revalidateFrontend(web, revalidationSecret)
     stopIfRequested()
   }
   const reconcileNow = async () => {
-    await deployStep(async () => reconcile(web, {
+    await reconcile(web, {
       contentRoot,
       roundDelayMs: RECONCILE_ROUND_DELAY_MS,
       log: () => {},
-    }))
+    })
     stopIfRequested()
   }
   const contractCheck = async () => {
-    await deployStep(async () => checkContent(await fetchContract(web), contentRoot))
+    checkContent(await fetchContract(web), contentRoot)
     stopIfRequested()
   }
   const page = async (slug: string) => {
