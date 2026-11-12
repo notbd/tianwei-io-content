@@ -32,15 +32,16 @@ process serves it over the protocol the API's driver speaks.
   the committed migration chain, the DDL production runs. `pnpm dev`,
   `pnpm rehearse` and the integration tests all use it.
 - `serveNeonHttp()` serves it on `127.0.0.1` over Neon's HTTP protocol.
-  The API's connector sends a loopback `DATABASE_URL` to that endpoint
-  over plain HTTP and leaves every other host to the driver. The API's
+  The API's connector sends a `DATABASE_URL` whose host is `127.0.0.1`
+  or `localhost` to that endpoint over plain HTTP and leaves every other
+  host to the driver. The API's
   queries, driver and Workers runtime are the production ones; only the
   far end of the HTTP request differs.
 - The database is rebuilt from the files in `content/` on every start.
   The files are the source of truth, so there is nothing to keep.
 - Docker, `docker-compose.yml`, the `LOCAL_*` variables and the eight
   scripts around them are gone. `DATABASE_URL` now always means a remote
-  database, and only `pnpm sync:prod` and `pnpm db:migrate` read it.
+  database, and only `pnpm sync:prod` and `pnpm db:migrate` connect to it.
 
 ## Alternatives considered
 

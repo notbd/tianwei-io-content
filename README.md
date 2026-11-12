@@ -106,7 +106,7 @@ With `FRONTEND_URL=http://localhost:3000` in `.env.local`, and the same `REVALID
 
 <h3>Rehearsing a release</h3>
 
-`pnpm rehearse` plays a content deploy against the three checkouts as they are on disk: this one, `../tianwei-io-api` and `../tianwei.io` (or `API_DIR` and `WEB_DIR`), each with its dependencies installed. It starts the database, the API (`wrangler dev`) and a production build of the frontend on ports it picks, then runs the deploy's own code through eight scenarios: the contract check, a sync, a reconcile that must fail before the cache is expired and pass after, a new post, an API that cannot read the database, a post that passes the contract but fails to render, and the way back. It cannot reach production: the three addresses are on `127.0.0.1`, both secrets are made up for the run, and it reads neither `.env.local` nor the API's `.dev.vars`.
+`pnpm rehearse` plays a content deploy against the three checkouts as they are on disk: this one, `../tianwei-io-api` and `../tianwei.io` (or `API_DIR` and `WEB_DIR`), each with its dependencies installed. It starts the database, the API (`wrangler dev`) and a production build of the frontend on ports it picks, then runs the deploy's own code through eight scenarios: the contract check, a sync, a reconcile that must fail before the cache is expired and pass after, a new post, an API that cannot read the database, a post that passes the contract but fails to render, and the way back. It cannot reach production: the three addresses are on `127.0.0.1`, both secrets are made up for the run, and it loads neither this repo's `.env.local` nor the API's `.dev.vars`. `next build` still loads the frontend checkout's own env files, but the rehearsal sets the API address and both secrets over them.
 
 - **It needs the frontend's checkout to itself.** It runs `next build` there, so from its start until it ends (or, with `--keep`, until it holds the stack) nothing else may use that checkout's `.next`: no `next start`, screenshots or e2e. A lock in `.next/cache` keeps a second rehearsal out, and only that. The build needs `NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME`, from the environment or that checkout's `.env.local`.
 - **`--keep`** holds the stack after every scenario passed and prints its addresses, both secrets and a draft's slug, for a manual pass or the frontend's e2e suite.
@@ -118,7 +118,7 @@ The exit code is 0 only when every scenario passed.
 
 | Variable | Purpose |
 | --- | --- |
-| `DATABASE_URL` | A remote database for one command, from the process environment only (`DATABASE_URL=... pnpm sync:prod`); a `.env.local` or `.env` that sets it is refused. Only `pnpm sync:prod` and `pnpm db:migrate` read it, and both stop without it; `pnpm dev` and `pnpm rehearse` never do |
+| `DATABASE_URL` | A remote database for one command, from the process environment only (`DATABASE_URL=... pnpm sync:prod`); a `.env.local` or `.env` that sets it is refused. Only `pnpm sync:prod` and `pnpm db:migrate` connect to it, and both stop without it; `pnpm dev` and `pnpm rehearse` never do |
 | `REVALIDATION_SECRET` | Bearer token for the frontend's `/api/revalidate` (must match the frontend's) |
 | `FRONTEND_URL` | A frontend on this machine, such as `http://localhost:3000`. `pnpm dev` expires its cache after every sync (only when the host is `localhost` or `127.0.0.1`), and `pnpm check:contract` and `pnpm frontend:revalidate` talk to it; unset, those two use `https://tianwei.io`. `pnpm rehearse` does not read it |
 
