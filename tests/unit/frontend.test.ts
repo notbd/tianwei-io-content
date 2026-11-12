@@ -309,6 +309,16 @@ describe('reconcile', () => {
     await expect(run()).rejects.toThrow('/posts/alpha failed: body disconnected')
   })
 
+  it('says why a request failed: fetch keeps the reason in the cause', async () => {
+    makeContent()
+    serve({
+      '/posts/alpha': async () => Promise.reject(new TypeError('fetch failed', {
+        cause: new Error('other side closed'),
+      })),
+    })
+    await expect(run()).rejects.toThrow('/posts/alpha failed: fetch failed (other side closed)')
+  })
+
   it('passes on a later round, comparing against the content as it was on entry', async () => {
     makeContent()
     let feedAnswers = 0
