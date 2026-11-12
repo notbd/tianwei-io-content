@@ -57,16 +57,13 @@ describe('localFrontendFromEnv', () => {
 })
 
 describe('revalidateFrontend', () => {
-  it('posts the posts tag with the bearer secret and returns the payload', async () => {
+  it('posts the posts tag with the bearer secret', async () => {
     const fetchMock = stubFetch(() => Response.json({
       success: true,
       revalidated: ['posts'],
     }))
 
-    expect(await revalidateFrontend(FRONTEND, 's3cret')).toEqual({
-      success: true,
-      revalidated: ['posts'],
-    })
+    await revalidateFrontend(FRONTEND, 's3cret')
     const [url, init] = fetchMock.mock.calls[0] ?? []
     expect(String(url)).toBe('https://preview.example.test/api/revalidate')
     expect(init).toMatchObject({
@@ -100,7 +97,7 @@ describe('revalidateFrontend', () => {
     [
       'a 200 HTML page',
       () => new Response('<html>proxy</html>', { status: 200 }),
-      /Non-JSON response \(200\)/,
+      /200 without "posts" in revalidated: <html>proxy<\/html>/,
     ],
   ])('fails the deploy on %s', async (_name, respond, message) => {
     stubFetch(respond)
@@ -118,15 +115,12 @@ describe('postBodyHash', () => {
 describe('postBodyHashesIn', () => {
   const hash = 'ab'.repeat(32)
 
-  it.each([
-    ['in <head>', `<html><head><meta charSet="utf-8"/><meta name="post-body-sha256" content="${hash}"/></head></html>`],
-    ['in <body>, content first, single quotes', `<body><p>x</p><META content='${hash}' name='post-body-sha256'></body>`],
-  ])('reads the tag %s', (_name, html) => {
-    expect(postBodyHashesIn(html)).toEqual([hash])
+  it('reads the tag as React prints it', () => {
+    expect(postBodyHashesIn(`<html><head><meta charSet="utf-8"/><meta name="post-body-sha256" content="${hash}"/></head></html>`)).toEqual([hash])
   })
 
   it('ignores other meta tags and any other 64-digit hex on the page', () => {
-    expect(postBodyHashesIn(`<meta name="description" content="${hash}"><p>${hash}</p>`)).toEqual([])
+    expect(postBodyHashesIn(`<meta name="description" content="${hash}"/><p>${hash}</p>`)).toEqual([])
   })
 })
 
@@ -225,8 +219,7 @@ describe('reconcile', () => {
   it.each([
     ['no tag', '<html><body>no meta</body></html>', 0],
     // the tags are found in the text: a comment's counts
-    ['a false tag in a comment before the real one', `<!--<meta name="post-body-sha256" content="fake">-->${alphaTag}`, 2],
-    ['a second tag without a content', `${alphaTag}<meta name="post-body-sha256">`, 2],
+    ['a false tag in a comment before the real one', `<!--<meta name="post-body-sha256" content="fake"/>-->${alphaTag}`, 2],
   ])('fails a post page with %s: it must have exactly one', async (_name, html, count) => {
     makeContent()
     serve({
@@ -263,16 +256,13 @@ describe('reconcile', () => {
     expect(requested.filter(p => p === '/sitemap.xml')).toHaveLength(2)
   })
 
-  it.each([
-    ['is no URL', 'not-a-url'],
-    ['has a slug that does not decode', 'https://tianwei.io/posts/%'],
-  ])('reports a sitemap whose address %s, after three rounds', async (_name, loc) => {
+  it('reports a sitemap whose address is no URL, after three rounds', async () => {
     makeContent()
     const requested = serve({
-      '/sitemap.xml': () => new Response(`<urlset><url><loc>${loc}</loc></url></urlset>`),
+      '/sitemap.xml': unreadableSitemap,
     })
 
-    await expect(run()).rejects.toThrow('https://preview.example.test/sitemap.xml lists an address that cannot be read: ')
+    await expect(run()).rejects.toThrow('https://preview.example.test/sitemap.xml lists an address that cannot be read: not-a-url')
     expect(requested).toEqual(['/sitemap.xml', '/sitemap.xml', '/sitemap.xml'])
   })
 

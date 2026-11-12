@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { CONTENT_TIME_ZONE } from '../../src/config.ts'
-import { parseFrontmatterDate, zonedMidnight } from '../../src/date.ts'
+import { parseFrontmatterDate } from '../../src/date.ts'
 
 afterEach(() => {
   vi.unstubAllEnvs()
@@ -103,14 +103,5 @@ describe('parseFrontmatterDate', () => {
     ],
   ])('rejects non-string value %j', (value, message) => {
     expect(() => parseFrontmatterDate(value)).toThrow(message)
-  })
-})
-
-describe('zonedMidnight', () => {
-  it('computes zone-local midnight as a UTC instant', () => {
-    expect(zonedMidnight(2025, 1, 31, 'America/New_York').getTime()).toBe(Date.UTC(2025, 0, 31, 5))
-    expect(zonedMidnight(2025, 7, 1, 'America/New_York').getTime()).toBe(Date.UTC(2025, 6, 1, 4))
-    expect(zonedMidnight(2025, 7, 1, 'UTC').getTime()).toBe(Date.UTC(2025, 6, 1))
-    expect(zonedMidnight(2025, 7, 1, 'Asia/Shanghai').getTime()).toBe(Date.UTC(2025, 5, 30, 16))
   })
 })

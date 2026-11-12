@@ -1,7 +1,7 @@
 import type { PgDatabase, PgQueryResultHKT } from 'drizzle-orm/pg-core'
 import type * as schema from '../drizzle/schema.ts'
 import type { SyncResult } from './types.ts'
-import { getTableColumns, inArray, sql } from 'drizzle-orm'
+import { getTableColumns, notInArray, sql } from 'drizzle-orm'
 import { posts } from '../drizzle/schema.ts'
 import { CONTENT_ROOT } from './config.ts'
 import { parseAllPosts } from './parser.ts'
@@ -53,9 +53,10 @@ export type SyncOptions = {
  *
  * Writers are serialized: the transaction first takes an advisory lock,
  * so a second sync (a manual `sync:prod` during a deploy, or the local
- * watcher) waits and then diffs against the committed result. Without
- * it, two syncs starting from the same rows would each delete only the
- * stale slugs they saw and could commit a mix of both content sets.
+ * watcher) waits and then writes over the committed result. Without it,
+ * the delete of one sync would not see the rows the other had upserted
+ * but not yet committed, and the two could commit a mix of both content
+ * sets.
  */
 export async function syncPosts(db: Db, options: SyncOptions = {}): Promise<SyncResult> {
   const contentRoot = options.contentRoot ?? CONTENT_ROOT
@@ -74,30 +75,24 @@ export async function syncPosts(db: Db, options: SyncOptions = {}): Promise<Sync
     // works through Neon's transaction-mode pooler, unlike session locks).
     await tx.execute(sql`select pg_advisory_xact_lock(${SYNC_LOCK_KEY})`)
 
-    const existing = await tx.select({ slug: posts.slug }).from(posts)
-
-    const diskSlugs = new Set(records.map(record => record.slug))
-    const deletedSlugs = existing
-      .map(row => row.slug)
-      .filter(slug => !diskSlugs.has(slug))
-
-    // Chunked to stay far below the Postgres wire-protocol limit of 65535
-    // bind parameters per statement (9 params/row → hard ceiling ~7280 rows).
-    const UPSERT_CHUNK_SIZE = 1000
-    for (let offset = 0; offset < records.length; offset += UPSERT_CHUNK_SIZE) {
+    // values([]) throws, and allowEmpty lets a sync with no records through
+    if (records.length > 0) {
       await tx
         .insert(posts)
-        .values(records.slice(offset, offset + UPSERT_CHUNK_SIZE))
+        .values(records)
         .onConflictDoUpdate({ target: posts.slug, set: TAKE_INCOMING })
     }
 
-    if (deletedSlugs.length > 0)
-      await tx.delete(posts).where(inArray(posts.slug, deletedSlugs))
+    // with no records the condition is `true`: every row goes
+    const deleted = await tx
+      .delete(posts)
+      .where(notInArray(posts.slug, records.map(record => record.slug)))
+      .returning({ slug: posts.slug })
 
     return {
       upserted: records.length,
-      deleted: deletedSlugs.length,
-      deletedSlugs,
+      deleted: deleted.length,
+      deletedSlugs: deleted.map(row => row.slug),
     }
   })
 }

@@ -34,10 +34,9 @@
  * --keep holds the stack after every scenario passed, and prints its
  * addresses and secrets, until interrupted.
  */
-import type { ChildProcess } from 'node:child_process'
 import type { Server } from 'node:http'
 import type { ContentRecord } from '../src/types.ts'
-import { spawn, spawnSync } from 'node:child_process'
+import { spawn } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import fs from 'node:fs'
 import { createServer } from 'node:net'
@@ -45,6 +44,7 @@ import os from 'node:os'
 import path from 'node:path'
 import process from 'node:process'
 import { setTimeout as sleep } from 'node:timers/promises'
+import { z } from 'zod'
 import { CONTENT_ROOT } from '../src/config.ts'
 import { checkContent, fetchContract } from '../src/contract.ts'
 import { readEnv } from '../src/env.ts'
@@ -61,10 +61,8 @@ const REQUEST_TIMEOUT_MS = 30_000
 const POLL_MS = 500
 const GROUP_TERM_WAIT_MS = 5_000
 const GROUP_KILL_WAIT_MS = 30_000
-const EXIT_EVENT_WAIT_MS = 5_000
-// the read-only ps and lsof the refusal runs
-const PROBE_TIMEOUT_MS = 30_000
-const PROBE_MAX_BUFFER = 16 * 1024 * 1024
+// how much of a child's output is kept, and how many lines of it a failed run prints
+const TAIL_CHARS = 16 * 1024
 const LOG_TAIL_LINES = 50
 const RECONCILE_ROUND_DELAY_MS = 1_000
 
@@ -72,6 +70,18 @@ const keep = process.argv.includes('--keep')
 const apiDir = path.resolve(readEnv('API_DIR') ?? '../tianwei-io-api')
 const webDir = path.resolve(readEnv('WEB_DIR') ?? '../tianwei.io')
 const lockPath = path.join(webDir, '.next/cache/rehearse.lock')
+
+// what the scenarios read of the API's two answers
+const postListSchema = z.object({
+  data: z.array(z.object({
+    slug: z.string(),
+  })),
+})
+const postSchema = z.object({
+  data: z.object({
+    content: z.string(),
+  }),
+})
 
 const say = (line: string) => console.info(`[rehearse] ${line}`)
 
@@ -97,14 +107,10 @@ function stopIfRequested(): void {
 const held: { what: string, release: () => Promise<void> | void }[] = []
 /** What the main flow is doing, for the line a signal prints. */
 let step = 'starting'
-/** True while a call into the deploy's own code runs: it takes no abort signal. */
-let deploying = false
-/** Holding the stack for --keep: a signal now ends a run that passed. */
-let holding = false
-/** Set when the cleanup starts: a child that ends after this was ended by it. */
-let cleaningUp = false
-/** Process groups that outlived SIGKILL; with any, the lock stays. */
-const survivors: string[] = []
+/** The signal that asked for the stop, when a signal was the first to ask. */
+let interruptedBy: NodeJS.Signals | undefined
+/** A process group outlived SIGKILL: the lock stays, since the group may still use WEB_DIR's .next. */
+let groupLeftBehind = false
 
 // A closed terminal makes writes to these fail later, as an event: with
 // no listener that is an uncaught exception in the middle of the cleanup.
@@ -119,10 +125,8 @@ for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) {
   process.on(signal, () => {
     if (stopping.signal.aborted)
       return
-    const finishesFirst = deploying
-      ? ' (a step that runs the deploy\'s own code finishes first)'
-      : ''
-    say(`Received ${signal} while ${step}; stopping${finishesFirst}`)
+    interruptedBy = signal
+    say(`Received ${signal} while ${step}; stopping`)
     requestStop(`received ${signal}`)
   })
 }
@@ -137,43 +141,11 @@ function note(line: string): void {
 }
 
 /**
- * One read-only command of the refusal. What did not run to its end comes
- * back with the reason and is never read as "found nothing": a truncated
- * `ps -A` has status 0 and an error.
+ * The lock exists: say whose it is and what to do, and take nothing. It
+ * looks at one thing, whether the pid in the lock exists; what that pid
+ * and the recorded groups are is for a person to check, with the commands
+ * printed.
  */
-function probe(command: string, args: string[]) {
-  const result = spawnSync(command, args, {
-    encoding: 'utf8',
-    stdio: ['ignore', 'pipe', 'pipe'],
-    timeout: PROBE_TIMEOUT_MS,
-    killSignal: 'SIGKILL',
-    maxBuffer: PROBE_MAX_BUFFER,
-  })
-  if (result.error !== undefined)
-    return { ok: false, why: result.error.message } as const
-  if (result.signal !== null)
-    return { ok: false, why: result.signal } as const
-  return {
-    ok: true,
-    status: result.status,
-    stdout: result.stdout,
-    stderr: result.stderr,
-  } as const
-}
-
-function notChecked(why: string, command: string): string {
-  return `could not be checked (${why}); run it yourself: ${command}`
-}
-
-/** A number read from the lock, or undefined when the text is not one in range. */
-function positiveInteger(text: string, max = Number.MAX_SAFE_INTEGER): number | undefined {
-  const value = Number(text)
-  return /^\d+$/.test(text) && Number.isSafeInteger(value) && value > 0 && value <= max
-    ? value
-    : undefined
-}
-
-/** The lock exists: say whose it is and what to do, and take nothing. */
 function refuse(): void {
   let text = ''
   try {
@@ -182,132 +154,46 @@ function refuse(): void {
   catch (err) {
     say(`The lock could not be read: ${messageOf(err)}`)
   }
-  const lines = text.split('\n').filter(line => line !== '')
-  // groups the run released before it ended (the build's): not to be looked for
-  const released = new Set(lines
-    .filter(line => line.startsWith('released '))
-    .map(line => line.slice('released '.length)))
-  const pidText = lines.find(line => line.startsWith('pid '))?.slice('pid '.length) ?? ''
-  const pid = positiveInteger(pidText)
-  say(`Refused: ${lockPath} exists. It records pid ${pid ?? `"${pidText}" (not a pid)`}.`)
-
-  // `confirmed` is false when the pid could not be checked: then this
-  // follows the instructions to check it, and must not contradict them
-  const leftover = (confirmed: boolean) => {
-    say(confirmed
-      ? 'The lock was left behind. Do not kill that pid. What it recorded:'
-      : 'What the lock recorded:')
-    // one ps for every group
-    const everyProcess = probe('ps', ['-A', '-o', 'pgid=,pid=,args='])
-    const psCommand = 'ps -A -o pgid=,pid=,args='
-    for (const line of lines) {
-      const [kind = '', value = ''] = line.split(' ')
-      if (kind === 'group') {
-        const group = positiveInteger(value)
-        if (group === undefined)
-          say(`  this entry of the lock cannot be read: ${line}`)
-        else if (released.has(value))
-          say(`  process group ${group}: released by the run when its process ended`)
-        else if (!everyProcess.ok)
-          say(`  process group ${group}: ${notChecked(everyProcess.why, psCommand)}`)
-        else if (everyProcess.status !== 0)
-          say(`  process group ${group}: ${notChecked(`exit code ${everyProcess.status}: ${firstLine(everyProcess.stderr)}`, psCommand)}`)
-        else
-          say(`  process group ${group}: ${inGroup(everyProcess.stdout, group)}`)
-      }
-      else if (kind === 'port') {
-        const port = positiveInteger(value, 65_535)
-        if (port === undefined) {
-          say(`  this entry of the lock cannot be read: ${line}`)
-          continue
-        }
-        const lsofArgs = ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN']
-        const listeners = probe('lsof', lsofArgs)
-        const lsofCommand = `lsof ${lsofArgs.join(' ')}`
-        if (!listeners.ok)
-          say(`  port ${port}: ${notChecked(listeners.why, lsofCommand)}`)
-        else if (listeners.status === 0)
-          say(`  port ${port}: someone listens\n${indent(listeners.stdout)}`)
-        else if (listeners.status === 1 && listeners.stdout === '' && listeners.stderr === '')
-          say(`  port ${port}: no one listens`)
-        else
-          say(`  port ${port}: ${notChecked(`exit code ${listeners.status}: ${firstLine(listeners.stderr)}`, lsofCommand)}`)
-      }
-      else if (kind === 'tmp') {
-        const directory = line.slice('tmp '.length)
-        say(`  temporary directory ${directory}: ${fs.existsSync(directory)
-          ? 'still there'
-          : 'gone'}`)
-      }
-    }
-    say('What to do: the processes listed are the rehearsal\'s own (next build, next-server, wrangler, workerd).')
-    say('  For each group that still has them: kill -TERM -- -<group>, and if they stay: kill -KILL -- -<group>.')
-    say('  A group whose commands are something else (the system reuses group numbers): leave it alone.')
-    say(`  Check with the same ps that the groups are gone, delete the temporary directory if it is still there, delete ${lockPath}, and run again.`)
+  // Nothing but a positive number counts: an empty lock would read as 0,
+  // and `kill -INT 0` signals the caller's own process group.
+  const pid = /^pid ([1-9]\d*)$/m.exec(text)?.[1]
+  say(`Refused: ${lockPath} exists.`)
+  if (pid === undefined) {
+    say('The lock records no pid that can be read: it was left behind.')
   }
-
-  const running = () => {
-    say(`A rehearsal is running (pid ${pid}). Wait for it to end; if it holds with --keep, press Ctrl-C in its terminal, or without a terminal: kill -INT ${pid} (it cleans up after itself). Or point WEB_DIR at another checkout. Do not delete the lock, and do not kill the processes it started.`)
-  }
-
-  if (pid === undefined || !isAlive(pid)) {
-    leftover(true)
-    return
-  }
-  const whoArgs = [
-    '-o',
-    'args=',
-    '-p',
-    String(pid),
-  ]
-  const who = probe('ps', whoArgs)
-  if (who.ok && who.status === 0) {
-    if (who.stdout.includes('scripts/rehearse.ts'))
-      running()
-    else
-      leftover(true)
-  }
-  else if (who.ok && who.status === 1) {
-    // gone between the two looks
-    leftover(true)
+  else if (exists(Number(pid))) {
+    say(`pid ${pid} is running. If it is a rehearsal (\`ps -o args= -p ${pid}\` shows scripts/rehearse.ts), wait for it to end or stop it with \`kill -INT ${pid}\`; it cleans up after itself. Or point WEB_DIR at another checkout.`)
+    say('Only if it is not a rehearsal (the system reuses pids) was the lock left behind. Then, and only then, follow the steps below.')
   }
   else {
-    const why = who.ok
-      ? `exit code ${who.status}: ${firstLine(who.stderr)}`
-      : who.why
-    say(`Whether pid ${pid} is a rehearsal ${notChecked(why, `ps ${whoArgs.join(' ')}`)}`)
-    say('  How to read it: with scripts/rehearse.ts in the output, a rehearsal is running. With other output, or with none and exit code 1 (that pid is gone), the lock was left behind. If the command hangs, is interrupted or fails another way, run it again; that does not make the lock a leftover.')
-    say(`  Until you know: do not delete the lock, do not kill any process, and send no signal to pid ${pid}. To run now, point WEB_DIR at another checkout.`)
-    say('  Only once you know the lock was left behind, follow this:')
-    leftover(false)
+    say(`pid ${pid} is gone: the lock was left behind.`)
   }
+  say('What the lock records:')
+  for (const line of text.split('\n').filter(line => line !== ''))
+    say(`  ${line}`)
+  say('To clean up after a rehearsal that is gone:')
+  say('  1. For each "group <n>" above without a "released <n>": run `ps -o pid,args -g <n>`. If it lists the rehearsal\'s processes (next, wrangler, workerd), run `kill -TERM -- -<n>`, and `kill -KILL -- -<n>` if they stay. If it lists anything else, leave that group alone: the system reuses the numbers.')
+  say('  2. Delete the "tmp" directory.')
+  say(`  3. Delete ${lockPath} and run again.`)
 }
 
-function isAlive(pid: number): boolean {
+/** The code of a system error (ESRCH, EEXIST), if `err` has one. */
+function errorCode(err: unknown): unknown {
+  return err instanceof Error && 'code' in err
+    ? err.code
+    : undefined
+}
+
+/** Whether a process (its pid) or a process group (its number, negated) exists. */
+function exists(id: number): boolean {
   try {
-    process.kill(pid, 0)
+    process.kill(id, 0)
     return true
   }
   catch (err) {
     // ESRCH: no such process. Anything else (EPERM): it exists.
-    return !(err instanceof Error && 'code' in err && err.code === 'ESRCH')
+    return errorCode(err) !== 'ESRCH'
   }
-}
-
-function firstLine(text: string): string {
-  return text.split('\n')[0] ?? ''
-}
-
-function indent(text: string): string {
-  return text.trimEnd().split('\n').map(line => `      ${line}`).join('\n')
-}
-
-/** The lines of `ps -A -o pgid=,pid=,args=` whose group is `group`. */
-function inGroup(psOutput: string, group: number): string {
-  const members = psOutput.split('\n').filter(line => line.trim().split(/\s+/)[0] === String(group))
-  return members.length === 0
-    ? 'no process'
-    : `still has\n${indent(members.join('\n'))}`
 }
 
 // --------------------------------------------------------------------------
@@ -316,15 +202,12 @@ function inGroup(psOutput: string, group: number): string {
 
 type Child = {
   name: string
-  process: ChildProcess
   /** its process group: it is started detached, so the group is its pid */
   group: number
-  /** the last LOG_TAIL_LINES lines it printed, kept in memory only */
-  tail: string[]
+  /** the last TAIL_CHARS characters it printed, kept in memory only */
+  output: string
   /** how it ended, once it has */
   ended?: string
-  /** true for the build, which ends by itself */
-  endsByItself: boolean
 }
 
 const children: Child[] = []
@@ -336,13 +219,21 @@ function describeExit(code: number | null, signal: NodeJS.Signals | null): strin
 }
 
 /**
- * Starts a child in its own process group, bound to the ports named, and
- * holds it. Its three `error` sources (the process and its two output
- * streams, which are separate objects) get their listeners in the turn it
- * is spawned: a command that does not exist reports that one turn later,
- * and an error nobody listens to is an uncaught exception.
+ * Starts a child in its own process group and holds it. Its three `error`
+ * sources (the process and its two output streams, which are separate
+ * objects) get their listeners in the turn it is spawned: a command that
+ * does not exist reports that one turn later, and an error nobody listens
+ * to is an uncaught exception.
  */
-function start(name: string, cwd: string, command: string, args: string[], env: NodeJS.ProcessEnv, ports: number[], endsByItself = false): Child {
+function start({ name, cwd, command, args, env, endsByItself = false }: {
+  name: string
+  cwd: string
+  command: string
+  args: string[]
+  env: NodeJS.ProcessEnv
+  /** true for the build: its end is judged where it is awaited */
+  endsByItself?: boolean
+}): Child {
   const spawned = spawn(command, args, {
     cwd,
     env,
@@ -359,10 +250,8 @@ function start(name: string, cwd: string, command: string, args: string[], env: 
   }
   const child: Child = {
     name,
-    process: spawned,
     group: spawned.pid,
-    tail: [],
-    endsByItself,
+    output: '',
   }
 
   held.push({
@@ -371,64 +260,34 @@ function start(name: string, cwd: string, command: string, args: string[], env: 
   })
   children.push(child)
   note(`group ${child.group} ${name}`)
-  for (const port of ports)
-    note(`port ${port} ${name}`)
-  say(`Started ${name}: pid ${child.group}, process group ${child.group}${ports.length === 0
-    ? ''
-    : `, port${ports.length === 1
-      ? ''
-      : 's'} ${ports.join(' and ')}`}`)
+  say(`Started ${name}: pid ${child.group}, process group ${child.group}`)
 
-  // Lines are cut here, not by readline: its Interface re-emits the
-  // stream's errors from itself, one more object to listen on.
+  // Both streams go into one text, so a line of one may land inside a
+  // line of the other: this is only what a failed run prints.
   for (const stream of [spawned.stdout, spawned.stderr]) {
     stream.setEncoding('utf8')
-    let partial = ''
-    const keepLine = (line: string) => {
-      child.tail.push(line)
-      if (child.tail.length > LOG_TAIL_LINES)
-        child.tail.shift()
-    }
     stream.on('data', (chunk: string) => {
-      const lines = (partial + chunk).split('\n')
-      // the last piece is an unfinished line until the next chunk says otherwise
-      partial = lines.pop() ?? ''
-      lines.forEach(keepLine)
-    })
-    stream.on('end', () => {
-      if (partial !== '')
-        keepLine(partial)
+      child.output = (child.output + chunk).slice(-TAIL_CHARS)
     })
   }
 
   spawned.on('exit', (code, signal) => {
     child.ended = describeExit(code, signal)
-    // the build's end is judged where the build is awaited; an end during
-    // the cleanup is the cleanup's doing
-    if (!endsByItself && !cleaningUp)
+    // an end during the cleanup asks for a stop too, which nobody reads by then
+    if (!endsByItself)
       requestStop(`${name} ended unexpectedly (${child.ended})`)
   })
   return child
 }
 
-function groupExists(group: number): boolean {
-  try {
-    process.kill(-group, 0)
-    return true
-  }
-  catch (err) {
-    return !(err instanceof Error && 'code' in err && err.code === 'ESRCH')
-  }
-}
-
 /** Whether the group is gone within `ms`. Not interruptible: this is the cleanup's own wait. */
 async function groupGone(group: number, ms: number): Promise<boolean> {
   for (const end = performance.now() + ms; performance.now() < end;) {
-    if (!groupExists(group))
+    if (!exists(-group))
       return true
     await sleep(100)
   }
-  return !groupExists(group)
+  return !exists(-group)
 }
 
 /** Signals a whole group; one that ended since it was last looked at is not an error. */
@@ -437,7 +296,7 @@ function signalGroup(group: number, signal: NodeJS.Signals): void {
     process.kill(-group, signal)
   }
   catch (err) {
-    if (!(err instanceof Error && 'code' in err && err.code === 'ESRCH'))
+    if (errorCode(err) !== 'ESRCH')
       throw err
   }
 }
@@ -445,20 +304,19 @@ function signalGroup(group: number, signal: NodeJS.Signals): void {
 /** Ends a child's whole group, the leader's descendants included, and says what it took. */
 async function stopGroup(child: Child): Promise<void> {
   let sent = 'no signal (its group had already ended)'
-  if (groupExists(child.group)) {
+  if (exists(-child.group)) {
     signalGroup(child.group, 'SIGTERM')
     sent = 'TERM'
     if (!await groupGone(child.group, GROUP_TERM_WAIT_MS)) {
       signalGroup(child.group, 'SIGKILL')
       sent = 'TERM, then KILL'
-      if (!await groupGone(child.group, GROUP_KILL_WAIT_MS))
-        survivors.push(`${child.name} (process group ${child.group})`)
+      if (!await groupGone(child.group, GROUP_KILL_WAIT_MS)) {
+        groupLeftBehind = true
+        throw new Error(`process group ${child.group} is still there after SIGKILL`)
+      }
     }
   }
-  // the exit event may come a moment after the group is gone
-  for (const end = performance.now() + EXIT_EVENT_WAIT_MS; child.ended === undefined && performance.now() < end;)
-    await sleep(50)
-  say(`Stopped ${child.name}: sent ${sent} to process group ${child.group}; it ended with ${child.ended ?? 'no exit reported yet'}`)
+  say(`Stopped ${child.name}: sent ${sent} to process group ${child.group}`)
 }
 
 /** Stops one child now, ahead of the cleanup, and takes it off `held`. */
@@ -468,8 +326,7 @@ async function releaseEarly(child: Child): Promise<void> {
     held.splice(index, 1)
   await stopGroup(child)
   // the lock still lists the group: a later refusal must not send anyone after its number
-  if (!groupExists(child.group))
-    note(`released ${child.group}`)
+  note(`released ${child.group}`)
 }
 
 /** How the child ended. Interrupted by a stop request; fails after `ms`. */
@@ -547,17 +404,6 @@ async function ready(what: string, isReady: () => Promise<boolean>): Promise<voi
 // The run
 // --------------------------------------------------------------------------
 
-/** Runs a call into the deploy's own code, marked for the line a signal prints. */
-async function deployStep<T>(call: () => Promise<T>): Promise<T> {
-  deploying = true
-  try {
-    return await call()
-  }
-  finally {
-    deploying = false
-  }
-}
-
 /** The error of a step that must fail; any step that passes instead fails the run. */
 async function failureOf(what: string, run: () => Promise<unknown>): Promise<string> {
   try {
@@ -617,7 +463,7 @@ async function run(temporary: string): Promise<void> {
   // runs to its end and the stop request is looked at right after it.
   step = 'running the first sync'
   const sync = async () => {
-    await deployStep(async () => syncPosts(db, { contentRoot }))
+    await syncPosts(db, { contentRoot })
     stopIfRequested()
   }
   await sync()
@@ -639,7 +485,6 @@ async function run(temporary: string): Promise<void> {
   if (typeof endpointAddress !== 'object' || endpointAddress === null)
     throw new Error('The database endpoint has no port')
   const databasePort = endpointAddress.port
-  note(`port ${databasePort} database`)
   say(`Database endpoint: port ${databasePort}`)
   stopIfRequested()
 
@@ -647,6 +492,8 @@ async function run(temporary: string): Promise<void> {
   const apiPort = await freePort()
   const inspectorPort = await freePort()
   const webPort = await freePort()
+  // printed here: the inspector's appears nowhere else, and the "ready" lines only once a service answers
+  say(`Ports: API ${apiPort}, inspector ${inspectorPort}, frontend ${webPort}`)
   stopIfRequested()
   const api = `http://127.0.0.1:${apiPort}`
   const web = new URL(`http://127.0.0.1:${webPort}`)
@@ -662,38 +509,38 @@ async function run(temporary: string): Promise<void> {
   step = 'starting the API'
   const emptyEnvFile = path.join(temporary, 'empty.env')
   fs.writeFileSync(emptyEnvFile, '')
-  start('api', apiDir, 'node_modules/.bin/wrangler', [
-    'dev',
-    '--port',
-    String(apiPort),
-    '--ip',
-    '127.0.0.1',
-    '--inspector-port',
-    String(inspectorPort),
-    '--inspector-ip',
-    '127.0.0.1',
-    '--var',
-    `DATABASE_URL:postgresql://local@127.0.0.1:${databasePort}/local`,
-    '--var',
-    `PREVIEW_SECRET:${previewSecret}`,
-    // an empty file, so .dev.vars and .env in that checkout are not read
-    '--env-file',
-    emptyEnvFile,
-    '--persist-to',
-    path.join(temporary, 'wrangler'),
-  ], { ...process.env, CLOUDFLARE_INCLUDE_PROCESS_ENV: 'false', WRANGLER_SEND_METRICS: 'false' }, [apiPort, inspectorPort])
+  start({
+    name: 'api',
+    cwd: apiDir,
+    command: 'node_modules/.bin/wrangler',
+    args: [
+      'dev',
+      '--port',
+      String(apiPort),
+      '--ip',
+      '127.0.0.1',
+      '--inspector-port',
+      String(inspectorPort),
+      '--inspector-ip',
+      '127.0.0.1',
+      '--var',
+      `DATABASE_URL:postgresql://local@127.0.0.1:${databasePort}/local`,
+      '--var',
+      `PREVIEW_SECRET:${previewSecret}`,
+      // an empty file, so .dev.vars and .env in that checkout are not read
+      '--env-file',
+      emptyEnvFile,
+      '--persist-to',
+      path.join(temporary, 'wrangler'),
+    ],
+    env: { ...process.env, CLOUDFLARE_INCLUDE_PROCESS_ENV: 'false', WRANGLER_SEND_METRICS: 'false' },
+  })
   const publishedSlugs = () => records().filter(record => record.isPublished).map(record => record.slug).toSorted()
   const apiSlugs = async (): Promise<string[]> => {
     const { status, body } = await get(`${api}/api/posts`)
     if (status !== 200)
       throw new Error(`${api}/api/posts answered ${status}`)
-    const list: unknown = JSON.parse(body)
-    const data = typeof list === 'object' && list !== null && 'data' in list && Array.isArray(list.data)
-      ? list.data
-      : []
-    return data.flatMap((post: unknown) => typeof post === 'object' && post !== null && 'slug' in post && typeof post.slug === 'string'
-      ? [post.slug]
-      : []).toSorted()
+    return postListSchema.parse(JSON.parse(body)).data.map(post => post.slug).toSorted()
   }
   await ready('The API', async () => (await apiSlugs()).join() === publishedSlugs().join())
   stopIfRequested()
@@ -710,7 +557,14 @@ async function run(temporary: string): Promise<void> {
   // with it a build reads nothing from the API
   fs.rmSync(path.join(webDir, '.next/cache/fetch-cache'), { recursive: true, force: true })
   const buildStarted = performance.now()
-  const build = start('build', webDir, 'node_modules/.bin/next', ['build'], webEnv, [], true)
+  const build = start({
+    name: 'build',
+    cwd: webDir,
+    command: 'node_modules/.bin/next',
+    args: ['build'],
+    env: webEnv,
+    endsByItself: true,
+  })
   const buildEnd = await ended(build, BUILD_TIMEOUT_MS)
   // Released now rather than in the cleanup: once its group is empty, the
   // number may be given to another process while the stack is held.
@@ -721,13 +575,19 @@ async function run(temporary: string): Promise<void> {
   say(`Build finished in ${Math.round((performance.now() - buildStarted) / 1000)} s`)
 
   step = 'starting the frontend'
-  start('web', webDir, 'node_modules/.bin/next', [
-    'start',
-    '-p',
-    String(webPort),
-    '-H',
-    '127.0.0.1',
-  ], webEnv, [webPort])
+  start({
+    name: 'web',
+    cwd: webDir,
+    command: 'node_modules/.bin/next',
+    args: [
+      'start',
+      '-p',
+      String(webPort),
+      '-H',
+      '127.0.0.1',
+    ],
+    env: webEnv,
+  })
   await ready('The frontend', async () => (await get(new URL('/contract.json', web))).status === 200)
   stopIfRequested()
   say(`Frontend ready: ${browserAddress}`)
@@ -737,19 +597,19 @@ async function run(temporary: string): Promise<void> {
   // written here; any other error fails the run.
   // ------------------------------------------------------------------
   const revalidate = async () => {
-    await deployStep(async () => revalidateFrontend(web, revalidationSecret))
+    await revalidateFrontend(web, revalidationSecret)
     stopIfRequested()
   }
   const reconcileNow = async () => {
-    await deployStep(async () => reconcile(web, {
+    await reconcile(web, {
       contentRoot,
       roundDelayMs: RECONCILE_ROUND_DELAY_MS,
       log: () => {},
-    }))
+    })
     stopIfRequested()
   }
   const contractCheck = async () => {
-    await deployStep(async () => checkContent(await fetchContract(web), contentRoot))
+    checkContent(await fetchContract(web), contentRoot)
     stopIfRequested()
   }
   const page = async (slug: string) => {
@@ -766,13 +626,10 @@ async function run(temporary: string): Promise<void> {
     expectEqual(`/posts/${slug} hash tags`, hashes.length, 1)
     return hashes[0] ?? ''
   }
-  const apiBody = async (slug: string): Promise<unknown> => {
+  const apiBody = async (slug: string): Promise<string> => {
     const { status, body } = await get(`${api}/api/post/${slug}`)
     expectEqual(`${api}/api/post/${slug} status`, status, 200)
-    const post: unknown = JSON.parse(body)
-    return typeof post === 'object' && post !== null && 'data' in post && typeof post.data === 'object' && post.data !== null && 'content' in post.data
-      ? post.data.content
-      : undefined
+    return postSchema.parse(JSON.parse(body)).data.content
   }
   /** The problems a failed reconcile lists, one per line of its error. */
   const problems = (error: string) => error.split('\n').filter(line => line.startsWith('  - '))
@@ -877,7 +734,6 @@ async function run(temporary: string): Promise<void> {
     return
 
   step = 'holding the stack (--keep)'
-  holding = true
   say('Holding the stack until interrupted (Ctrl-C):')
   say(`  database: postgresql://local@127.0.0.1:${databasePort}/local`)
   say(`  API:      ${api}`)
@@ -885,29 +741,30 @@ async function run(temporary: string): Promise<void> {
   say(`  REVALIDATION_SECRET: ${revalidationSecret}`)
   say(`  PREVIEW_SECRET: ${previewSecret}`)
   say(`  the draft: ${draftSlug}`)
-  // ends by rejecting when the stop is requested
-  await sleep(2 ** 31 - 1, undefined, { signal: stopping.signal })
+  // A signal is how a held run ends, and it passed. Any other stop request (a child ended) fails it.
+  await sleep(2 ** 31 - 1, undefined, { signal: stopping.signal }).catch(() => {})
+  if (interruptedBy === undefined)
+    stopIfRequested()
 }
 
 /** Releases everything held, newest first, and says how the run went. Runs once, from the `finally`. */
 async function cleanUp(failure: string | undefined): Promise<number> {
-  cleaningUp = true
+  // nothing threw: every scenario passed, and with --keep the stack was held until a signal
+  const passed = failure === undefined
+  // read now: the children this stops ask for a stop as they end
   const stopped = stopping.signal.aborted
     ? String(stopping.signal.reason)
     : undefined
-  const bySignalWhileHolding = holding && stopped !== undefined && stopped.startsWith('received SIG')
-  const passed = (failure === undefined && stopped === undefined) || bySignalWhileHolding
-  const interrupted = stopped !== undefined && stopped.startsWith('received SIG')
-  const reason = stopped ?? (failure === undefined
+  const reason = stopped ?? (passed
     ? 'every scenario passed'
     : `failed while ${step}: ${failure}`)
   say(`Cleaning up: ${reason}`)
 
   // a failed run shows what the children said; CI has no temporary files to look at
-  if (!passed && !interrupted) {
+  if (!passed && interruptedBy === undefined) {
     for (const child of children) {
-      say(`The last ${child.tail.length} lines of ${child.name}:`)
-      for (const line of child.tail)
+      say(`The end of what ${child.name} printed:`)
+      for (const line of child.output.trimEnd().split('\n').slice(-LOG_TAIL_LINES))
         console.info(`    ${line}`)
     }
   }
@@ -936,27 +793,12 @@ async function cleanUp(failure: string | undefined): Promise<number> {
 // still reaches the cleanup.
 // --------------------------------------------------------------------------
 
-/** Whether the package.json at `file` lists next among its dependencies. */
-function dependsOnNext(file: string): boolean {
-  if (!fs.existsSync(file))
-    return false
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(fs.readFileSync(file, 'utf8'))
-  }
-  catch (err) {
-    throw new Error(`${file} is not valid JSON: ${messageOf(err)}`)
-  }
-  return typeof parsed === 'object' && parsed !== null
-    && 'dependencies' in parsed && typeof parsed.dependencies === 'object' && parsed.dependencies !== null
-    && 'next' in parsed.dependencies
-}
-
 let failure: string | undefined
 let refused = false
 try {
-  if (!dependsOnNext(path.join(webDir, 'package.json')))
-    throw new Error(`WEB_DIR (${webDir}) is not a checkout of the frontend: no package.json that depends on next`)
+  // the file the build and the frontend are started from
+  if (!fs.existsSync(path.join(webDir, 'node_modules/.bin/next')))
+    throw new Error(`WEB_DIR (${webDir}) is not a checkout of the frontend with its dependencies installed: it has no node_modules/.bin/next`)
   fs.mkdirSync(path.dirname(lockPath), { recursive: true })
 
   let lock: number | undefined
@@ -965,7 +807,7 @@ try {
     lock = fs.openSync(lockPath, 'wx')
   }
   catch (err) {
-    if (!(err instanceof Error && 'code' in err && err.code === 'EEXIST'))
+    if (errorCode(err) !== 'EEXIST')
       throw err
     refused = true
     refuse()
@@ -978,10 +820,8 @@ try {
       what: 'the lock',
       release: () => {
         fs.closeSync(lockDescriptor)
-        if (survivors.length > 0) {
-          say(`These process groups are still there after SIGKILL, so the lock stays: ${survivors.join(', ')}`)
-          throw new Error('process groups left behind')
-        }
+        if (groupLeftBehind)
+          throw new Error('a process group is still there after SIGKILL, so the lock stays')
         fs.rmSync(lockPath)
       },
     })

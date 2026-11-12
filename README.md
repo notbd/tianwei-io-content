@@ -10,11 +10,10 @@ The content engine of my personal website [tianwei.io](https://tianwei.io).
 
 - **Runtime**: [Node.js](https://nodejs.org) + [TypeScript](https://www.typescriptlang.org)
 - **ORM**: [Drizzle ORM](https://orm.drizzle.team)
-- **Database**: [PostgreSQL](https://www.postgresql.org)
-- **Remote DB Host**: [Neon](https://neon.com)
+- **Database**: [PostgreSQL](https://www.postgresql.org) on [Neon](https://neon.com)
 - **Content Format**: [MDX](https://mdxjs.com) files with frontmatter
 - **Testing and local database**: [Vitest](https://vitest.dev) + [PGlite](https://pglite.dev) (Postgres in the Node process)
-- **Infrastructure**: [GitHub Actions](https://docs.github.com/en/actions) (CI + remote sync)
+- **Infrastructure**: [GitHub Actions](https://docs.github.com/en/actions) (CI and the deploy)
 
 <h2>Site Architecture</h2>
 
@@ -24,11 +23,11 @@ This is the content engine, one of the three repos behind the site, next to the 
 
 This repo owns the posts, the database schema and every write; the API only reads. A sync (`src/sync.ts`) makes the `posts` table match the files in `content/`:
 
-- **Validate first**: every file is parsed before the database is touched, and one invalid file stops the run. Frontmatter is YAML only (a `---js` fence is refused before anything in it runs) and follows a strict schema (a misspelled key such as `updateAt` is an error, not ignored); titles and descriptions must be valid XML text, and neither the author nor the body may contain NUL. The MDX body is parsed with the syntax the frontend uses (MDX with GFM) and may contain no JavaScript, which the frontend refuses to run. Errors name the file and line.
+- **Validate first**: every file is parsed before the database is touched, and one invalid file stops the run, naming the file and line. Frontmatter is YAML under a strict schema: a misspelled key such as `updateAt` is an error, not ignored, and a `---js` fence is refused before anything in it runs. Titles and descriptions must be valid XML text (they go into the RSS feed), and neither the author nor the body may contain NUL bytes (Postgres cannot store them). The body is parsed with the syntax the frontend uses, MDX with GFM, and must not contain any JavaScript.
 - **Checked against the frontend**: `pnpm check:contract` holds every post, drafts included, to the frontend's [`/contract.json`](https://tianwei.io/contract.json): the components a post may use and their attributes, and the time zone dates are anchored to. Pull requests run it, and the deploy runs it before writing anything ([tianwei.io ADR-0006](https://github.com/notbd/tianwei.io/blob/main/docs/adr/0006-cross-repo-releases.md)).
 - **One transaction**: posts are upserted by slug, so ids stay stable, and rows whose files are gone are deleted. Readers never see a half-synced table ([ADR-0001](./docs/adr/0001-transactional-reconcile-sync.md)).
 - **Guard rails**: concurrent syncs wait on a Postgres advisory lock, and a sync that would leave no published post is refused unless `--allow-empty` is passed, so a bad checkout cannot empty production. `--allow-empty` only lets the sync through: the frontend still refuses to build, and the API's deploy check still fails, without a published post.
-- **No production database by accident**: `DATABASE_URL` is read only from the process environment. Every entry point that reads `.env.local` goes through `loadLocalEnv()` (`src/env.ts`), which refuses a file that sets it: local development never reads the variable, but `pnpm db:migrate` and `pnpm sync:prod` do, and would use that database without being told to. A `.env` that sets it is refused too: `drizzle-kit` loads that file by itself, so the migration would still reach that database.
+- **No production database by accident**: `DATABASE_URL` comes only from the process environment, and only `pnpm db:migrate` and `pnpm sync:prod` read it. A `.env.local` or `.env` that sets it is refused (`loadLocalEnv()` in `src/env.ts`): with the URL in a file, those two commands would use that database without being told to. `.env` is checked as well because `drizzle-kit` loads it by itself.
 - **Dates**: `createdAt` and `updatedAt` are calendar dates in `America/New_York`, stored as that day's midnight there, whatever the machine's time zone ([ADR-0003](./docs/adr/0003-content-time-zone.md)).
 - **Migrations**: the schema is in `drizzle/`, and the migration history is committed and applied by the deploy, never generated on the fly ([ADR-0002](./docs/adr/0002-committed-migration-history.md)).
 
@@ -98,21 +97,21 @@ With `FRONTEND_URL=http://localhost:3000` in `.env.local`, and the same `REVALID
 | `pnpm dev [--allow-empty]` | The local database, its endpoint, a sync, and a re-sync on each save |
 | `pnpm rehearse [--keep]` | Rehearse a release against the three checkouts on this machine (below) |
 | `pnpm new-post "Title" [category]` | Scaffold a draft (`isPublished: false`, today's date in `America/New_York`) that already passes the parser; refuses a slug any post already has |
-| `pnpm sync:prod` | Sync the database `DATABASE_URL` names, set for this one command (`DATABASE_URL=... pnpm sync:prod`); stops without it. The deploy runs it against production |
-| `pnpm db:generate` / `db:migrate` | Generate a migration from schema changes / apply pending migrations to the database `DATABASE_URL` names |
+| `pnpm sync:prod` | Sync the database that `DATABASE_URL` points to, set for this one command (`DATABASE_URL=... pnpm sync:prod`); stops without it. The deploy runs it against production |
+| `pnpm db:generate` / `db:migrate` | Generate a migration from schema changes / apply pending migrations to the database that `DATABASE_URL` points to |
 | `pnpm check:contract [--require]` | Check every post, drafts included, against the frontend's `/contract.json`; without `--require`, a frontend with no contract to give only warns |
 | `pnpm frontend:revalidate` | Revalidate the frontend twice, then reconcile: every page must answer and each post page must show the body synced here |
 | `pnpm lint` / `typecheck` / `test` | Quality gates (same as CI) |
 
 <h3>Rehearsing a release</h3>
 
-`pnpm rehearse` plays a content deploy against the three checkouts as they are on disk: this one, `../tianwei-io-api` and `../tianwei.io` (or `API_DIR` and `WEB_DIR`), each with its dependencies installed. It starts the database, the API (`wrangler dev`) and a production build of the frontend on ports it picks, then runs the deploy's own code through eight scenarios: the contract check, a sync, a reconcile that must fail before the cache is expired and pass after, a new post, an API that cannot read the database, a post that passes the contract but fails to render, and the way back. It cannot reach production: the three services listen on `127.0.0.1` only, both secrets are made up for the run, and it loads neither this repo's `.env.local` nor the API's `.dev.vars`. `next build` still loads the frontend checkout's own env files, but the rehearsal sets the API address and both secrets over them.
+`pnpm rehearse` plays a content deploy against the three checkouts as they are on disk: this one, `../tianwei-io-api` and `../tianwei.io` (or `API_DIR` and `WEB_DIR`), each with its dependencies installed. It starts the database, the API (`wrangler dev`) and a production build of the frontend on ports it picks, then runs the deploy's own code through eight scenarios: the contract check, a sync, a reconcile that must fail before the cache is expired and pass after, a new post, an API that cannot read the database, a post that passes the contract but fails to render, and the way back. The exit code is 0 only when every scenario passes.
+
+It cannot reach production: the three services listen on `127.0.0.1` only, both secrets are made up for the run, and it loads neither this repo's `.env.local` nor the API's `.dev.vars`. `next build` still loads the frontend checkout's own env files, but the rehearsal sets the API address and both secrets over them.
 
 - **It needs the frontend's checkout to itself.** It runs `next build` there, so from its start until it ends (or, with `--keep`, until it holds the stack) nothing else may use that checkout's `.next`: no `next start`, screenshots or e2e. A lock in `.next/cache` keeps a second rehearsal out, and only that. The build needs `NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME`, from the environment or that checkout's `.env.local`.
-- **`--keep`** holds the stack after every scenario passed and prints its addresses, both secrets and a draft's slug, for a manual pass or the frontend's e2e suite. The frontend's address is printed as `localhost`: Next rewrites `127.0.0.1` to `localhost` in its redirects, so the draft preview works only when the browser starts there.
-- **Stopping**: Ctrl-C asks for a stop, and the run cleans up after itself (its children, the lock, its temporary directory). A step that runs the deploy's own code (a sync, the contract check, a revalidation, a reconcile) is not interrupted, and the run stops right after it. Locally that is a few seconds; against a frontend that hangs it is as long as that step's requests take to time out: 60 s for a contract check or a revalidation, three minutes or more for a reconcile. `kill -9 <pid>` ends it at once; the next rehearsal then refuses to start and prints what was left behind and how to clear it.
-
-The exit code is 0 only when every scenario passed.
+- **`--keep`** holds the stack once every scenario has passed, and prints its addresses, both secrets and a draft's slug, for a manual pass or the frontend's e2e suite. The frontend's address is printed as `localhost`: Next rewrites `127.0.0.1` to `localhost` in its redirects, so the draft preview works only when the browser starts there.
+- **Stopping**: Ctrl-C asks for a stop, and the run cleans up after itself (its children, the lock, its temporary directory). A step that runs the deploy's own code (a sync, the contract check, a revalidation, a reconcile) is not interrupted; the run stops when it returns, which locally takes a few seconds. `kill -9 <pid>` ends it at once and cleans up nothing: the next rehearsal refuses to start, prints what the lock recorded and says how to clear it.
 
 <h2>Configuration</h2>
 
@@ -120,7 +119,7 @@ The exit code is 0 only when every scenario passed.
 | --- | --- |
 | `DATABASE_URL` | A remote database for one command, from the process environment only (`DATABASE_URL=... pnpm sync:prod`); a `.env.local` or `.env` that sets it is refused. Only `pnpm sync:prod` and `pnpm db:migrate` connect to it, and both stop without it; `pnpm dev` and `pnpm rehearse` never do |
 | `REVALIDATION_SECRET` | Bearer token for the frontend's `/api/revalidate` (must match the frontend's) |
-| `FRONTEND_URL` | A frontend on this machine, such as `http://localhost:3000`. `pnpm dev` expires its cache after every sync (only when the host is `localhost` or `127.0.0.1`), and `pnpm check:contract` and `pnpm frontend:revalidate` talk to it; unset, those two use `https://tianwei.io`. `pnpm rehearse` does not read it |
+| `FRONTEND_URL` | Points `pnpm check:contract` and `pnpm frontend:revalidate` at a frontend other than `https://tianwei.io`, such as `http://localhost:3000`. When its host is `localhost` or `127.0.0.1`, `pnpm dev` also expires that frontend's cache after every sync. `pnpm rehearse` does not read it |
 
 `.env.example` explains each one; `pnpm dev` needs none of them. The deploy workflow reads two repository secrets: `PROD_REMOTE_DATABASE_URL`, passed as `DATABASE_URL`, and `REVALIDATION_SECRET`.
 
@@ -150,7 +149,7 @@ A push to `main` that touches content or sync code runs `.github/workflows/deplo
    - `/feed.xml` and every published post's `/opengraph-image` answer 200;
    - every draft's `/posts/<slug>` answers 404.
 
-   Each request has 60 s, the whole body included. A round collects every problem; if there is any, the round runs again 5 s later, three rounds in all. A failure names the URL and whether it answered an error, timed out or still shows a previous version (with the expected and the reported hash); the log keeps `x-vercel-cache` and `age` for every request.
+   Each request has 60 s, the whole body included. A round collects every problem; if there are any, the round runs again 5 s later, up to three rounds in all. A failure names the URL and whether it answered an error, timed out or still shows a previous version (with the expected and the reported hash); the log keeps `x-vercel-cache` and `age` for every request.
 
 ```mermaid
 %%{init: {"sequence": {"mirrorActors": false, "diagramMarginY": 72}}}%%

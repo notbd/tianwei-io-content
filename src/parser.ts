@@ -4,7 +4,6 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { createProcessor } from '@mdx-js/mdx'
 import slugify from '@sindresorhus/slugify'
-import matter from 'gray-matter'
 import yaml from 'js-yaml'
 import remarkGfm from 'remark-gfm'
 import { z } from 'zod'
@@ -13,48 +12,28 @@ import { CONTENT_ROOT } from './config.ts'
 import { parseFrontmatterDate } from './date.ts'
 import { messageOf } from './errors.ts'
 
-/** Result of a structure validation on a content file path. */
-export type StructureResult
-  = | { ok: true, category: string, slug: string }
-    | { ok: false, reason: string }
-
 /**
- * Validate that the given file path follows the required structure:
+ * The category and slug of the post at `filePath`, which must be
  *   {contentRoot}/{category}/{post_name}.mdx
- *
- * Only touches the filesystem to confirm the category directory exists;
- * never logs. Returns the derived category and slug, or a
- * machine-readable failure reason.
+ * Reads the path only, never the disk. Throws, naming what is wrong.
  */
-export function validateMdxFileStructure(
-  filePath: string,
-  contentRoot: string = CONTENT_ROOT,
-): StructureResult {
+export function postLocation(filePath: string, contentRoot: string): { category: string, slug: string } {
+  const invalid = (reason: string) => new Error(`[parser] Invalid content path "${filePath}": ${reason}`)
   const relativePath = path.relative(contentRoot, filePath)
 
   if (relativePath.startsWith('..') || path.isAbsolute(relativePath))
-    return { ok: false, reason: `path is outside the content root: "${filePath}"` }
+    throw invalid(`path is outside the content root: "${filePath}"`)
 
   const pathSegments = relativePath.split(path.sep)
   if (pathSegments.length !== 2)
-    return { ok: false, reason: `expected structure {content}/{category}/{post}.mdx, got "${relativePath}"` }
+    throw invalid(`expected structure {content}/{category}/{post}.mdx, got "${relativePath}"`)
 
   const [rawCategory = '', rawFilename = ''] = pathSegments
   if (rawCategory === '' || rawFilename === '')
-    return { ok: false, reason: `malformed content path: "${relativePath}"` }
-
-  let categoryIsDirectory: boolean
-  try {
-    categoryIsDirectory = fs.statSync(path.join(contentRoot, rawCategory)).isDirectory()
-  }
-  catch {
-    categoryIsDirectory = false
-  }
-  if (!categoryIsDirectory)
-    return { ok: false, reason: `category "${rawCategory}" is not a directory under the content root` }
+    throw invalid(`malformed content path: "${relativePath}"`)
 
   if (!rawFilename.toLowerCase().endsWith('.mdx'))
-    return { ok: false, reason: `invalid file type "${rawFilename}": expected an .mdx file` }
+    throw invalid(`invalid file type "${rawFilename}": expected an .mdx file`)
 
   // slugify can yield '' (e.g. symbol-only or non-Latin names), and the DB
   // columns are varchars; catch both here, in the parse phase, so a bad
@@ -63,47 +42,37 @@ export function validateMdxFileStructure(
   const slug = slugify(path.basename(rawFilename, path.extname(rawFilename)))
 
   if (category.length === 0)
-    return { ok: false, reason: `category "${rawCategory}" slugifies to an empty string` }
+    throw invalid(`category "${rawCategory}" slugifies to an empty string`)
   if (category.length > CATEGORY_MAX_LENGTH)
-    return { ok: false, reason: `category "${rawCategory}" slugifies to ${category.length} chars (max ${CATEGORY_MAX_LENGTH})` }
+    throw invalid(`category "${rawCategory}" slugifies to ${category.length} chars (max ${CATEGORY_MAX_LENGTH})`)
   if (slug.length === 0)
-    return { ok: false, reason: `filename "${rawFilename}" slugifies to an empty slug` }
+    throw invalid(`filename "${rawFilename}" slugifies to an empty slug`)
   if (slug.length > SLUG_MAX_LENGTH)
-    return { ok: false, reason: `filename "${rawFilename}" slugifies to a ${slug.length}-char slug (max ${SLUG_MAX_LENGTH})` }
+    throw invalid(`filename "${rawFilename}" slugifies to a ${slug.length}-char slug (max ${SLUG_MAX_LENGTH})`)
 
-  return { ok: true, category, slug }
-}
-
-/**
- * gray-matter's default YAML schema turns an unquoted `2024-02-30` into a
- * Date that has already rolled over to March 1, before any validation can
- * see what the author wrote. CORE_SCHEMA has no timestamp type (and no JS
- * types, so load() is safe), which leaves dates as the authored strings
- * for parseFrontmatterDate to check.
- *
- * gray-matter also picks a parser from the text after the opening `---`,
- * and its javascript engine (`---js`, `---javascript`) evals the
- * frontmatter. FRONTMATTER_OPEN refuses those files before gray-matter
- * runs; the engine below makes sure nothing could ever fall back to eval.
- */
-const FRONTMATTER_OPTIONS = {
-  engines: {
-    yaml: (input: string): object => {
-      // js-yaml 3 types load() as any; a scalar is no frontmatter (a list
-      // passes here and fails the schema)
-      const data: unknown = yaml.load(input, { schema: yaml.CORE_SCHEMA })
-      if (typeof data !== 'object' || data === null)
-        throw new Error('frontmatter must be a YAML mapping of keys to values')
-      return data
-    },
-    javascript: (): object => {
-      throw new Error('frontmatter must be YAML')
-    },
-  },
+  return { category, slug }
 }
 
 /** A bare `---` line: frontmatter is YAML, with no language after the fence. */
 const FRONTMATTER_OPEN = /^---[ \t]*\r?\n/
+/** The next line that starts with `---` ends the frontmatter. */
+const FRONTMATTER_CLOSE = '\n---'
+
+/**
+ * Frontmatter as the mapping the author wrote. CORE_SCHEMA has no
+ * timestamp type: the default schema turns an unquoted `2024-02-30` into a
+ * Date that has already rolled over to March 1, before any validation can
+ * see what the author wrote. It has no JS types either, so load() is safe.
+ * Dates stay the authored strings for parseFrontmatterDate to check.
+ */
+function loadFrontmatter(yamlText: string): object {
+  // js-yaml 3 types load() as any; a scalar is no frontmatter (a list
+  // passes here and fails the schema)
+  const data: unknown = yaml.load(yamlText, { schema: yaml.CORE_SCHEMA })
+  if (typeof data !== 'object' || data === null)
+    throw new Error('frontmatter must be a YAML mapping of keys to values')
+  return data
+}
 
 /** A 'yyyy-MM-dd' calendar date, anchored to CONTENT_TIME_ZONE midnight (ADR-0003). */
 function calendarDate(value: unknown, ctx: z.RefinementCtx): Date {
@@ -296,9 +265,7 @@ export function parseMdxFile(
   contentRoot: string = CONTENT_ROOT,
   components?: ComponentRules,
 ): ContentRecord {
-  const structure = validateMdxFileStructure(filePath, contentRoot)
-  if (!structure.ok)
-    throw new Error(`[parser] Invalid content path "${filePath}": ${structure.reason}`)
+  const { category, slug } = postLocation(filePath, contentRoot)
 
   const raw = fs.readFileSync(filePath, 'utf-8')
 
@@ -312,10 +279,17 @@ export function parseMdxFile(
     throw new Error(`[parser] "${filePath}" must open with a bare --- line (frontmatter is YAML only), found ${JSON.stringify(firstLine)} at line 1`)
   }
 
-  let data: unknown
-  let content: string
+  // from right after the opening fence, so js-yaml counts lines as the file does
+  const yamlStart = '---'.length
+  const close = raw.indexOf(FRONTMATTER_CLOSE, yamlStart)
+  if (close === -1)
+    throw new Error(`[parser] "${filePath}" has no closing --- line after its frontmatter`)
+  // the body is what follows the closing fence, less the line break that ends it
+  const content = raw.slice(close + FRONTMATTER_CLOSE.length).replace(/^\r?\n?/, '')
+
+  let data: object
   try {
-    ({ data, content } = matter(raw, FRONTMATTER_OPTIONS))
+    data = loadFrontmatter(raw.slice(yamlStart, close))
   }
   catch (err) {
     // js-yaml errors carry a line number but no file; add the path
@@ -323,7 +297,6 @@ export function parseMdxFile(
   }
 
   const frontmatter = frontmatterSchema.safeParse(data)
-  // gray-matter's content is the file after the closing '---'
   const linesBeforeBody = raw.slice(0, raw.length - content.length).split('\n').length - 1
   const errors = [
     ...(frontmatter.success
@@ -338,8 +311,8 @@ export function parseMdxFile(
     throw new Error(`[parser] Invalid post "${filePath}":\n  - ${errors.join('\n  - ')}`)
 
   return {
-    slug: structure.slug,
-    category: structure.category,
+    slug,
+    category,
     ...frontmatter.data,
     description: frontmatter.data.description ?? null,
     content,
@@ -365,11 +338,9 @@ export function parseAllPosts(contentRoot: string = CONTENT_ROOT, components?: C
     return []
 
   const categories = fs
-    .readdirSync(contentRoot, { withFileTypes: true })
-    // follow symlinked category dirs too: isDirectory() is false for them
-    .filter(dirent => dirent.isDirectory()
-      || (dirent.isSymbolicLink() && fs.statSync(path.join(contentRoot, dirent.name)).isDirectory()))
-    .map(dirent => dirent.name)
+    .readdirSync(contentRoot)
+    // statSync follows a symlinked category directory
+    .filter(name => fs.statSync(path.join(contentRoot, name)).isDirectory())
 
   const records: ContentRecord[] = []
   const failures: string[] = []
