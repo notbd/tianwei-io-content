@@ -42,9 +42,12 @@ export function localFrontendFromEnv(): URL | undefined {
   const value = readEnv('FRONTEND_URL')
   if (value === undefined)
     return undefined
-  if (!URL.canParse(value))
-    throw new Error(`FRONTEND_URL is not a URL: "${value}"`)
-  const url = new URL(value)
+  // `localhost:3000` parses, with `localhost:` as its scheme
+  const url = URL.canParse(value)
+    ? new URL(value)
+    : undefined
+  if (url === undefined || (url.protocol !== 'http:' && url.protocol !== 'https:'))
+    throw new Error(`FRONTEND_URL is not an http(s) URL: "${value}"`)
   return url.hostname === '127.0.0.1' || url.hostname === 'localhost'
     ? url
     : undefined

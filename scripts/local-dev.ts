@@ -26,6 +26,16 @@ loadLocalEnv()
 // names this port. Taken means another `pnpm dev` runs; this one fails.
 const PORT = 5431
 
+let frontend: URL | undefined
+try {
+  frontend = localFrontendFromEnv()
+}
+catch (err) {
+  // before the database is opened: nothing to release
+  console.error('[dev]', messageOf(err))
+  process.exit(1)
+}
+
 const { db, client } = await openLocalDb()
 const server = await serveNeonHttp(client, PORT, (err) => {
   // Not shutdown(): that path exits 0. Nothing here outlives the process
@@ -39,15 +49,6 @@ const server = await serveNeonHttp(client, PORT, (err) => {
 })
 console.info(`[dev] Database ready. The API reads it with DATABASE_URL=postgresql://local@127.0.0.1:${PORT}/local`)
 
-let frontend: URL | undefined
-try {
-  frontend = localFrontendFromEnv()
-}
-catch (err) {
-  // the database is in memory: nothing to release but the process
-  console.error('[dev]', messageOf(err))
-  process.exit(1)
-}
 const secret = readEnv('REVALIDATION_SECRET')
 function revalidateLocalFrontend() {
   if (frontend === undefined || secret === undefined)
