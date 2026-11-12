@@ -37,7 +37,7 @@
 import type { ChildProcess } from 'node:child_process'
 import type { Server } from 'node:http'
 import type { ContentRecord } from '../src/types.ts'
-import { spawn, spawnSync } from 'node:child_process'
+import { spawn } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import fs from 'node:fs'
 import { createServer } from 'node:net'
@@ -62,9 +62,6 @@ const POLL_MS = 500
 const GROUP_TERM_WAIT_MS = 5_000
 const GROUP_KILL_WAIT_MS = 30_000
 const EXIT_EVENT_WAIT_MS = 5_000
-// the read-only ps and lsof the refusal runs
-const PROBE_TIMEOUT_MS = 30_000
-const PROBE_MAX_BUFFER = 16 * 1024 * 1024
 const LOG_TAIL_LINES = 50
 const RECONCILE_ROUND_DELAY_MS = 1_000
 
@@ -137,43 +134,11 @@ function note(line: string): void {
 }
 
 /**
- * One read-only command of the refusal. What did not run to its end comes
- * back with the reason and is never read as "found nothing": a truncated
- * `ps -A` has status 0 and an error.
+ * The lock exists: say whose it is and what to do, and take nothing. It
+ * looks at one thing, whether the pid in the lock exists; what that pid
+ * and the recorded groups are is for a person to check, with the commands
+ * printed.
  */
-function probe(command: string, args: string[]) {
-  const result = spawnSync(command, args, {
-    encoding: 'utf8',
-    stdio: ['ignore', 'pipe', 'pipe'],
-    timeout: PROBE_TIMEOUT_MS,
-    killSignal: 'SIGKILL',
-    maxBuffer: PROBE_MAX_BUFFER,
-  })
-  if (result.error !== undefined)
-    return { ok: false, why: result.error.message } as const
-  if (result.signal !== null)
-    return { ok: false, why: result.signal } as const
-  return {
-    ok: true,
-    status: result.status,
-    stdout: result.stdout,
-    stderr: result.stderr,
-  } as const
-}
-
-function notChecked(why: string, command: string): string {
-  return `could not be checked (${why}); run it yourself: ${command}`
-}
-
-/** A number read from the lock, or undefined when the text is not one in range. */
-function positiveInteger(text: string, max = Number.MAX_SAFE_INTEGER): number | undefined {
-  const value = Number(text)
-  return /^\d+$/.test(text) && Number.isSafeInteger(value) && value > 0 && value <= max
-    ? value
-    : undefined
-}
-
-/** The lock exists: say whose it is and what to do, and take nothing. */
 function refuse(): void {
   let text = ''
   try {
@@ -182,105 +147,27 @@ function refuse(): void {
   catch (err) {
     say(`The lock could not be read: ${messageOf(err)}`)
   }
-  const lines = text.split('\n').filter(line => line !== '')
-  // groups the run released before it ended (the build's): not to be looked for
-  const released = new Set(lines
-    .filter(line => line.startsWith('released '))
-    .map(line => line.slice('released '.length)))
-  const pidText = lines.find(line => line.startsWith('pid '))?.slice('pid '.length) ?? ''
-  const pid = positiveInteger(pidText)
-  say(`Refused: ${lockPath} exists. It records pid ${pid ?? `"${pidText}" (not a pid)`}.`)
-
-  // `confirmed` is false when the pid could not be checked: then this
-  // follows the instructions to check it, and must not contradict them
-  const leftover = (confirmed: boolean) => {
-    say(confirmed
-      ? 'The lock was left behind. Do not kill that pid. What it recorded:'
-      : 'What the lock recorded:')
-    // one ps for every group
-    const everyProcess = probe('ps', ['-A', '-o', 'pgid=,pid=,args='])
-    const psCommand = 'ps -A -o pgid=,pid=,args='
-    for (const line of lines) {
-      const [kind = '', value = ''] = line.split(' ')
-      if (kind === 'group') {
-        const group = positiveInteger(value)
-        if (group === undefined)
-          say(`  this entry of the lock cannot be read: ${line}`)
-        else if (released.has(value))
-          say(`  process group ${group}: released by the run when its process ended`)
-        else if (!everyProcess.ok)
-          say(`  process group ${group}: ${notChecked(everyProcess.why, psCommand)}`)
-        else if (everyProcess.status !== 0)
-          say(`  process group ${group}: ${notChecked(`exit code ${everyProcess.status}: ${firstLine(everyProcess.stderr)}`, psCommand)}`)
-        else
-          say(`  process group ${group}: ${inGroup(everyProcess.stdout, group)}`)
-      }
-      else if (kind === 'port') {
-        const port = positiveInteger(value, 65_535)
-        if (port === undefined) {
-          say(`  this entry of the lock cannot be read: ${line}`)
-          continue
-        }
-        const lsofArgs = ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN']
-        const listeners = probe('lsof', lsofArgs)
-        const lsofCommand = `lsof ${lsofArgs.join(' ')}`
-        if (!listeners.ok)
-          say(`  port ${port}: ${notChecked(listeners.why, lsofCommand)}`)
-        else if (listeners.status === 0)
-          say(`  port ${port}: someone listens\n${indent(listeners.stdout)}`)
-        else if (listeners.status === 1 && listeners.stdout === '' && listeners.stderr === '')
-          say(`  port ${port}: no one listens`)
-        else
-          say(`  port ${port}: ${notChecked(`exit code ${listeners.status}: ${firstLine(listeners.stderr)}`, lsofCommand)}`)
-      }
-      else if (kind === 'tmp') {
-        const directory = line.slice('tmp '.length)
-        say(`  temporary directory ${directory}: ${fs.existsSync(directory)
-          ? 'still there'
-          : 'gone'}`)
-      }
-    }
-    say('What to do: the processes listed are the rehearsal\'s own (next build, next-server, wrangler, workerd).')
-    say('  For each group that still has them: kill -TERM -- -<group>, and if they stay: kill -KILL -- -<group>.')
-    say('  A group whose commands are something else (the system reuses group numbers): leave it alone.')
-    say(`  Check with the same ps that the groups are gone, delete the temporary directory if it is still there, delete ${lockPath}, and run again.`)
+  // Nothing but a positive number counts: an empty lock would read as 0,
+  // and `kill -INT 0` signals the caller's own process group.
+  const pid = /^pid ([1-9]\d*)$/m.exec(text)?.[1]
+  say(`Refused: ${lockPath} exists.`)
+  if (pid === undefined) {
+    say('The lock records no pid that can be read: it was left behind.')
   }
-
-  const running = () => {
-    say(`A rehearsal is running (pid ${pid}). Wait for it to end; if it holds with --keep, press Ctrl-C in its terminal, or without a terminal: kill -INT ${pid} (it cleans up after itself). Or point WEB_DIR at another checkout. Do not delete the lock, and do not kill the processes it started.`)
-  }
-
-  if (pid === undefined || !isAlive(pid)) {
-    leftover(true)
-    return
-  }
-  const whoArgs = [
-    '-o',
-    'args=',
-    '-p',
-    String(pid),
-  ]
-  const who = probe('ps', whoArgs)
-  if (who.ok && who.status === 0) {
-    if (who.stdout.includes('scripts/rehearse.ts'))
-      running()
-    else
-      leftover(true)
-  }
-  else if (who.ok && who.status === 1) {
-    // gone between the two looks
-    leftover(true)
+  else if (isAlive(Number(pid))) {
+    say(`pid ${pid} is running. If it is a rehearsal (\`ps -o args= -p ${pid}\` shows scripts/rehearse.ts), wait for it to end or stop it with \`kill -INT ${pid}\`; it cleans up after itself. Or point WEB_DIR at another checkout.`)
+    say('Only if it is not a rehearsal (the system reuses pids) was the lock left behind. Then, and only then, follow the steps below.')
   }
   else {
-    const why = who.ok
-      ? `exit code ${who.status}: ${firstLine(who.stderr)}`
-      : who.why
-    say(`Whether pid ${pid} is a rehearsal ${notChecked(why, `ps ${whoArgs.join(' ')}`)}`)
-    say('  How to read it: with scripts/rehearse.ts in the output, a rehearsal is running. With other output, or with none and exit code 1 (that pid is gone), the lock was left behind. If the command hangs, is interrupted or fails another way, run it again; that does not make the lock a leftover.')
-    say(`  Until you know: do not delete the lock, do not kill any process, and send no signal to pid ${pid}. To run now, point WEB_DIR at another checkout.`)
-    say('  Only once you know the lock was left behind, follow this:')
-    leftover(false)
+    say(`pid ${pid} is gone: the lock was left behind.`)
   }
+  say('What the lock records:')
+  for (const line of text.split('\n').filter(line => line !== ''))
+    say(`  ${line}`)
+  say('To clean up after a rehearsal that is gone:')
+  say('  1. For each "group <n>" above without a "released <n>": run `ps -o pid,args -g <n>`. If it lists the rehearsal\'s processes (next, wrangler, workerd), run `kill -TERM -- -<n>`, and `kill -KILL -- -<n>` if they stay. If it lists anything else, leave that group alone: the system reuses the numbers.')
+  say('  2. Delete the "tmp" directory.')
+  say(`  3. Delete ${lockPath} and run again.`)
 }
 
 function isAlive(pid: number): boolean {
@@ -292,22 +179,6 @@ function isAlive(pid: number): boolean {
     // ESRCH: no such process. Anything else (EPERM): it exists.
     return !(err instanceof Error && 'code' in err && err.code === 'ESRCH')
   }
-}
-
-function firstLine(text: string): string {
-  return text.split('\n')[0] ?? ''
-}
-
-function indent(text: string): string {
-  return text.trimEnd().split('\n').map(line => `      ${line}`).join('\n')
-}
-
-/** The lines of `ps -A -o pgid=,pid=,args=` whose group is `group`. */
-function inGroup(psOutput: string, group: number): string {
-  const members = psOutput.split('\n').filter(line => line.trim().split(/\s+/)[0] === String(group))
-  return members.length === 0
-    ? 'no process'
-    : `still has\n${indent(members.join('\n'))}`
 }
 
 // --------------------------------------------------------------------------
