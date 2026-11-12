@@ -39,10 +39,8 @@ export function frontendFromEnv(): URL {
 /** FRONTEND_URL as a URL; anything but an http(s) URL is refused, naming the variable. */
 function parseFrontendUrl(value: string): URL {
   // `localhost:3000` parses, with `localhost:` as its scheme
-  const url = URL.canParse(value)
-    ? new URL(value)
-    : undefined
-  if (url === undefined || (url.protocol !== 'http:' && url.protocol !== 'https:'))
+  const url = URL.parse(value)
+  if (url === null || (url.protocol !== 'http:' && url.protocol !== 'https:'))
     throw new Error(`FRONTEND_URL is not an http(s) URL: "${value}"`)
   return url
 }
@@ -72,9 +70,8 @@ const revalidatedPostsSchema = z.object({
  * a 200 whose `revalidated` lists `posts` fails the deploy; a 502 means the
  * read failed and nothing was expired.
  */
-export async function revalidateFrontend(frontend: URL, secret: string): Promise<unknown> {
-  const endpoint = new URL('/api/revalidate', frontend)
-  const response = await fetch(endpoint, {
+export async function revalidateFrontend(frontend: URL, secret: string): Promise<void> {
+  const response = await fetch(new URL('/api/revalidate', frontend), {
     method: 'POST',
     headers: {
       'content-type': 'application/json',
@@ -92,20 +89,15 @@ export async function revalidateFrontend(frontend: URL, secret: string): Promise
   if (response.status !== 200)
     throw new Error(`[revalidate] Failed (${response.status}): ${rawBody}`)
 
-  let payload: unknown
+  let revalidated: string[] = []
   try {
-    payload = JSON.parse(rawBody)
+    ({ revalidated } = revalidatedPostsSchema.parse(JSON.parse(rawBody)))
   }
   catch {
-    // e.g. a proxy/CDN HTML error page with a 200 status
-    throw new Error(`[revalidate] Non-JSON response (${response.status}) from ${endpoint.href}: ${rawBody.slice(0, 300)}`)
+    // not JSON (say a proxy's HTML error page with a 200) or not the frontend's answer: it lists nothing
   }
-
-  const parsed = revalidatedPostsSchema.safeParse(payload)
-  if (!parsed.success || !parsed.data.revalidated.includes('posts'))
+  if (!revalidated.includes('posts'))
     throw new Error(`[revalidate] 200 without "posts" in revalidated: ${rawBody.slice(0, 300)}`)
-
-  return payload
 }
 
 /** The meta tag on each /posts/<slug> page: the SHA-256 of the body it rendered. */
@@ -116,32 +108,13 @@ export function postBodyHash(body: string): string {
   return createHash('sha256').update(body).digest('hex')
 }
 
-const META_TAG = /<meta\b[^>]*>/gi
-const ATTRIBUTE = /([^\s"'<>/=]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'<>=`]+))/g
+// The tag as React prints it: the frontend writes <meta name={...} content={...} />.
+// Any other spelling finds no tag, which fails the reconcile; the rehearsal checks this against a real build.
+const POST_BODY_HASH_TAG = new RegExp(`<meta name="${POST_BODY_HASH_META}" content="([^"]*)"/>`, 'g')
 
-/**
- * The content of every <meta name="post-body-sha256"> on the page, wherever
- * the tag is in the HTML (not only in <head>). A tag without a content
- * attribute counts too, as ''. Reads the tags' attributes, never just any
- * 64-digit hex on the page.
- *
- * It finds the tags in the text and does not parse HTML, so the same text
- * inside a comment or a script counts as a tag. One of those next to the
- * real tag fails the page, which must have exactly one. One of those alone,
- * without a real tag, is compared with the expected hash and fails as well:
- * to pass, the page would have to print the new body's correct hash there.
- */
+/** The content of every post-body-sha256 tag on the page, wherever it is in the HTML. */
 export function postBodyHashesIn(html: string): string[] {
-  const hashes: string[] = []
-  for (const [tag] of html.matchAll(META_TAG)) {
-    const attributes = new Map(Array.from(tag.matchAll(ATTRIBUTE), ([, name = '', double, single, bare]) => [
-      name.toLowerCase(),
-      double ?? single ?? bare ?? '',
-    ]))
-    if (attributes.get('name') === POST_BODY_HASH_META)
-      hashes.push(attributes.get('content') ?? '')
-  }
-  return hashes
+  return Array.from(html.matchAll(POST_BODY_HASH_TAG), ([, hash = '']) => hash)
 }
 
 /** One request of a reconcile round and what its answer must be. */
@@ -211,48 +184,16 @@ async function reconcileRound(
   log: (line: string) => void,
 ): Promise<{ checked: number, failures: string[] }> {
   const sitemapUrl = new URL('/sitemap.xml', frontend)
-  let sitemap: string
+  let pages: SitemapPage[]
   try {
-    const page = await get(sitemapUrl, log)
-    if (page.status !== 200) {
-      return {
-        checked: 1,
-        failures: [`${sitemapUrl.href} answered ${page.status}`],
-      }
-    }
-    sitemap = new TextDecoder().decode(page.body)
+    pages = await readSitemap(sitemapUrl, log)
   }
   catch (err) {
     return {
       checked: 1,
       failures: [
-        requestFailure(sitemapUrl, err),
+        messageOf(err),
       ],
-    }
-  }
-
-  // the sitemap holds canonical URLs; check the same paths on this frontend
-  let pages: { path: string, postSlug: string | undefined }[]
-  try {
-    pages = Array.from(sitemap.matchAll(/<loc>([^<]+)<\/loc>/g), ([, loc = '']) => {
-      const path = new URL(loc).pathname
-      return {
-        path,
-        postSlug: postSlugOf(path),
-      }
-    })
-  }
-  catch (err) {
-    // an address that is no URL, or a slug that does not decode
-    return {
-      checked: 1,
-      failures: [`${sitemapUrl.href} lists an address that cannot be read: ${messageOf(err)}`],
-    }
-  }
-  if (pages.length === 0) {
-    return {
-      checked: 1,
-      failures: [`${sitemapUrl.href} lists no pages`],
     }
   }
 
@@ -288,6 +229,39 @@ async function reconcileRound(
   await Promise.all(Array.from({ length: CHECK_CONCURRENCY }, worker))
 
   return { checked: checks.length + 1, failures }
+}
+
+type SitemapPage = {
+  path: string
+  /** set when the page is a post's */
+  postSlug: string | undefined
+}
+
+/** The pages the sitemap lists. Throws, naming the sitemap and what is wrong, when it cannot be read or lists none. */
+async function readSitemap(sitemapUrl: URL, log: (line: string) => void): Promise<SitemapPage[]> {
+  let sitemap: Fetched
+  try {
+    sitemap = await get(sitemapUrl, log)
+  }
+  catch (err) {
+    throw new Error(requestFailure(sitemapUrl, err))
+  }
+  if (sitemap.status !== 200)
+    throw new Error(`${sitemapUrl.href} answered ${sitemap.status}`)
+
+  // the sitemap holds canonical URLs; check the same paths on this frontend
+  const pages = Array.from(new TextDecoder().decode(sitemap.body).matchAll(/<loc>([^<]+)<\/loc>/g), ([, loc = '']) => {
+    const path = URL.parse(loc)?.pathname
+    if (path === undefined)
+      throw new Error(`${sitemapUrl.href} lists an address that cannot be read: ${loc}`)
+    return {
+      path,
+      postSlug: /^\/posts\/([^/]+)$/.exec(path)?.[1],
+    }
+  })
+  if (pages.length === 0)
+    throw new Error(`${sitemapUrl.href} lists no pages`)
+  return pages
 }
 
 /** What is wrong with one check's answer, if anything. Never throws. */
@@ -338,12 +312,4 @@ function requestFailure(url: URL, err: unknown): string {
   return err instanceof Error && err.name === 'TimeoutError'
     ? `${url.href} timed out after ${REQUEST_TIMEOUT_MS / 1000} s`
     : `${url.href} failed: ${messageOf(err)}`
-}
-
-/** The slug of a /posts/<slug> path; undefined for any other path. */
-function postSlugOf(path: string): string | undefined {
-  const slug = /^\/posts\/([^/]+)$/.exec(path)?.[1]
-  return slug === undefined
-    ? undefined
-    : decodeURIComponent(slug)
 }

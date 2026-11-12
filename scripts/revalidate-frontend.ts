@@ -26,11 +26,13 @@ const frontend = frontendFromEnv()
 const secret = requireEnv('REVALIDATION_SECRET')
 console.info(`[revalidate] Frontend: ${frontend.origin}`)
 
-console.info('[revalidate] Success:', await revalidateFrontend(frontend, secret))
+await revalidateFrontend(frontend, secret)
+console.info('[revalidate] Expired the posts tag')
 
 console.info(`[revalidate] Second pass in ${SECOND_PASS_DELAY_MS / 1000} s, after any render that read the old rows has stored its result`)
 await sleep(SECOND_PASS_DELAY_MS)
-console.info('[revalidate] Success:', await revalidateFrontend(frontend, secret))
+await revalidateFrontend(frontend, secret)
+console.info('[revalidate] Expired the posts tag again')
 
 const checked = await reconcile(frontend)
 console.info(`[reconcile] All ${checked} requests answered as expected; every post page shows the synced body`)
