@@ -418,14 +418,25 @@ async function groupGone(group: number, ms: number): Promise<boolean> {
   return !groupExists(group)
 }
 
+/** Signals a whole group; one that ended since it was last looked at is not an error. */
+function signalGroup(group: number, signal: NodeJS.Signals): void {
+  try {
+    process.kill(-group, signal)
+  }
+  catch (err) {
+    if (!(err instanceof Error && 'code' in err && err.code === 'ESRCH'))
+      throw err
+  }
+}
+
 /** Ends a child's whole group, the leader's descendants included, and says what it took. */
 async function stopGroup(child: Child): Promise<void> {
   let sent = 'no signal (its group had already ended)'
   if (groupExists(child.group)) {
-    process.kill(-child.group, 'SIGTERM')
+    signalGroup(child.group, 'SIGTERM')
     sent = 'TERM'
     if (!await groupGone(child.group, GROUP_TERM_WAIT_MS)) {
-      process.kill(-child.group, 'SIGKILL')
+      signalGroup(child.group, 'SIGKILL')
       sent = 'TERM, then KILL'
       if (!await groupGone(child.group, GROUP_KILL_WAIT_MS))
         survivors.push(`${child.name} (process group ${child.group})`)
@@ -577,7 +588,7 @@ async function run(temporary: string): Promise<void> {
 
   // The deploy's own functions take no abort signal, so each of their calls
   // runs to its end and the stop request is looked at right after it.
-  step = 'the first sync'
+  step = 'running the first sync'
   const sync = async () => {
     await syncPosts(db, { contentRoot })
     stopIfRequested()
@@ -734,7 +745,7 @@ async function run(temporary: string): Promise<void> {
   /** The problems a failed reconcile lists, one per line of its error. */
   const problems = (error: string) => error.split('\n').filter(line => line.startsWith('  - '))
   const scenario = async (name: string, play: () => Promise<void>) => {
-    step = `the scenario "${name}"`
+    step = `running the scenario "${name}"`
     const started = performance.now()
     await play()
     stopIfRequested()
@@ -803,7 +814,12 @@ async function run(temporary: string): Promise<void> {
   })
 
   await scenario('a render failure the contract does not see', async () => {
-    edit('\n```ts {1-99999999}\nconst rehearsal = true\n```\n')
+    // A line range rehype-pretty-code cannot highlight: it throws while the
+    // page renders, and the contract has no word for it. Kept small: the
+    // range is expanded into an array before the throw, and 1-99999999 held
+    // next start's event loop for seconds, long enough for its keep-alive
+    // timer to reset a connection the reconcile was reusing.
+    edit('\n```ts {1-999999}\nconst rehearsal = true\n```\n')
     await sync()
     await contractCheck()
     await revalidate()
