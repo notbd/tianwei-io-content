@@ -8,7 +8,7 @@
  * sync, revalidate, reconcile, and the failures the deploy must catch.
  *
  * It cannot reach production. The database is in this process, and the
- * three addresses are http://127.0.0.1 on ports it picks itself; both
+ * three services listen on 127.0.0.1, on ports it picks itself; both
  * secrets are made up for the run. It does not read FRONTEND_URL or
  * REVALIDATION_SECRET and loads no .env.local. The API gets its two
  * per-run values through `wrangler dev --var` and an empty --env-file, so
@@ -25,7 +25,9 @@
  *
  * Stopping: SIGINT, SIGTERM and SIGHUP only ask for a stop. Everything
  * the run holds is released in one place, the `finally` of the outermost
- * `try`, in the reverse order it was taken. A step that calls the deploy's
+ * `try`, in the reverse order it was taken, with one exception: the
+ * build's process group is released as soon as the build ends, since its
+ * number may be given to another process while the stack is held. A step that calls the deploy's
  * own functions (sync, contract check, revalidate, reconcile) is not
  * interrupted; the stop takes effect when it returns.
  *
@@ -115,7 +117,11 @@ for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) {
   process.on(signal, () => {
     if (stopping.signal.aborted)
       return
-    say(`Received ${signal} while ${step}; stopping (a step that runs the deploy's own code finishes first)`)
+    // only a scenario calls the deploy's own code, which is not interrupted
+    const finishesFirst = step.startsWith('running ')
+      ? ' (a step that runs the deploy\'s own code finishes first)'
+      : ''
+    say(`Received ${signal} while ${step}; stopping${finishesFirst}`)
     requestStop(`received ${signal}`)
   })
 }
@@ -176,6 +182,12 @@ function refuse(): void {
     say(`The lock could not be read: ${messageOf(err)}`)
   }
   const lines = text.split('\n').filter(line => line !== '')
+  // groups the run released before it ended (the build's): not to be looked for
+  const released = new Set(lines.flatMap(line => line.startsWith('released ')
+    ? [
+        line.slice('released '.length),
+      ]
+    : []))
   const pidText = lines.find(line => line.startsWith('pid '))?.slice('pid '.length) ?? ''
   const pid = positiveInteger(pidText)
   say(`Refused: ${lockPath} exists. It records pid ${pid ?? `"${pidText}" (not a pid)`}.`)
@@ -195,6 +207,8 @@ function refuse(): void {
         const group = positiveInteger(value)
         if (group === undefined)
           say(`  this entry of the lock cannot be read: ${line}`)
+        else if (released.has(value))
+          say(`  process group ${group}: released by the run when its process ended`)
         else if (!everyProcess.ok)
           say(`  process group ${group}: ${notChecked(everyProcess.why, psCommand)}`)
         else if (everyProcess.status !== 0)
@@ -229,7 +243,7 @@ function refuse(): void {
     }
     say('What to do: the processes listed are the rehearsal\'s own (next build, next-server, wrangler, workerd).')
     say('  For each group that still has them: kill -TERM -- -<group>, and if they stay: kill -KILL -- -<group>.')
-    say('  A group whose commands are something else (group numbers are reused after a restart): leave it alone.')
+    say('  A group whose commands are something else (the system reuses group numbers): leave it alone.')
     say(`  Check with the same ps that the groups are gone, delete the temporary directory if it is still there, delete ${lockPath}, and run again.`)
   }
 
@@ -454,6 +468,9 @@ async function releaseEarly(child: Child): Promise<void> {
   if (index !== -1)
     held.splice(index, 1)
   await stopGroup(child)
+  // the lock still lists the group: a later refusal must not send anyone after its number
+  if (!groupExists(child.group))
+    note(`released ${child.group}`)
 }
 
 /** How the child ended. Interrupted by a stop request; fails after `ms`. */
@@ -623,6 +640,11 @@ async function run(temporary: string): Promise<void> {
   stopIfRequested()
   const api = `http://127.0.0.1:${apiPort}`
   const web = new URL(`http://127.0.0.1:${webPort}`)
+  // What a person opens: localhost, not 127.0.0.1. Next rewrites 127.0.0.1
+  // to localhost in request.url, so the draft preview's redirect lands on
+  // localhost, and a browser that began on 127.0.0.1 would not send its
+  // draft cookie there.
+  const browserAddress = `http://localhost:${webPort}`
   const revalidationSecret = randomBytes(24).toString('hex')
   // 16 characters at least: with a shorter one the API says nothing and turns the preview off
   const previewSecret = randomBytes(24).toString('hex')
@@ -698,7 +720,7 @@ async function run(temporary: string): Promise<void> {
   ], webEnv, [webPort])
   await ready('The frontend', async () => (await get(new URL('/contract.json', web))).status === 200)
   stopIfRequested()
-  say(`Frontend ready: ${web.origin}`)
+  say(`Frontend ready: ${browserAddress}`)
 
   // ------------------------------------------------------------------
   // The scenarios. A step that must fail has to fail for the reason
@@ -849,10 +871,7 @@ async function run(temporary: string): Promise<void> {
   say('Holding the stack until interrupted (Ctrl-C):')
   say(`  database: postgresql://local@127.0.0.1:${databasePort}/local`)
   say(`  API:      ${api}`)
-  // localhost, not 127.0.0.1: Next rewrites 127.0.0.1 to localhost in
-  // request.url, so the draft preview's redirect lands on localhost, and a
-  // browser that began on 127.0.0.1 would not send its draft cookie there
-  say(`  frontend: http://localhost:${webPort}`)
+  say(`  frontend: ${browserAddress}`)
   say(`  REVALIDATION_SECRET: ${revalidationSecret}`)
   say(`  PREVIEW_SECRET: ${previewSecret}`)
   say(`  the draft: ${draftSlug}`)
@@ -911,7 +930,13 @@ async function cleanUp(failure: string | undefined): Promise<number> {
 function dependsOnNext(file: string): boolean {
   if (!fs.existsSync(file))
     return false
-  const parsed: unknown = JSON.parse(fs.readFileSync(file, 'utf8'))
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(fs.readFileSync(file, 'utf8'))
+  }
+  catch (err) {
+    throw new Error(`${file} is not valid JSON: ${messageOf(err)}`)
+  }
   return typeof parsed === 'object' && parsed !== null
     && 'dependencies' in parsed && typeof parsed.dependencies === 'object' && parsed.dependencies !== null
     && 'next' in parsed.dependencies
