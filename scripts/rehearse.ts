@@ -148,7 +148,7 @@ function refuse(): void {
   if (pid === undefined) {
     say('The lock records no pid that can be read: it was left behind.')
   }
-  else if (isAlive(Number(pid))) {
+  else if (exists(Number(pid))) {
     say(`pid ${pid} is running. If it is a rehearsal (\`ps -o args= -p ${pid}\` shows scripts/rehearse.ts), wait for it to end or stop it with \`kill -INT ${pid}\`; it cleans up after itself. Or point WEB_DIR at another checkout.`)
     say('Only if it is not a rehearsal (the system reuses pids) was the lock left behind. Then, and only then, follow the steps below.')
   }
@@ -164,14 +164,22 @@ function refuse(): void {
   say(`  3. Delete ${lockPath} and run again.`)
 }
 
-function isAlive(pid: number): boolean {
+/** The code of a system error (ESRCH, EEXIST), if `err` has one. */
+function errorCode(err: unknown): unknown {
+  return err instanceof Error && 'code' in err
+    ? err.code
+    : undefined
+}
+
+/** Whether a process (its pid) or a process group (its number, negated) exists. */
+function exists(id: number): boolean {
   try {
-    process.kill(pid, 0)
+    process.kill(id, 0)
     return true
   }
   catch (err) {
     // ESRCH: no such process. Anything else (EPERM): it exists.
-    return !(err instanceof Error && 'code' in err && err.code === 'ESRCH')
+    return errorCode(err) !== 'ESRCH'
   }
 }
 
@@ -269,24 +277,14 @@ function start(name: string, cwd: string, command: string, args: string[], env: 
   return child
 }
 
-function groupExists(group: number): boolean {
-  try {
-    process.kill(-group, 0)
-    return true
-  }
-  catch (err) {
-    return !(err instanceof Error && 'code' in err && err.code === 'ESRCH')
-  }
-}
-
 /** Whether the group is gone within `ms`. Not interruptible: this is the cleanup's own wait. */
 async function groupGone(group: number, ms: number): Promise<boolean> {
   for (const end = performance.now() + ms; performance.now() < end;) {
-    if (!groupExists(group))
+    if (!exists(-group))
       return true
     await sleep(100)
   }
-  return !groupExists(group)
+  return !exists(-group)
 }
 
 /** Signals a whole group; one that ended since it was last looked at is not an error. */
@@ -295,7 +293,7 @@ function signalGroup(group: number, signal: NodeJS.Signals): void {
     process.kill(-group, signal)
   }
   catch (err) {
-    if (!(err instanceof Error && 'code' in err && err.code === 'ESRCH'))
+    if (errorCode(err) !== 'ESRCH')
       throw err
   }
 }
@@ -303,7 +301,7 @@ function signalGroup(group: number, signal: NodeJS.Signals): void {
 /** Ends a child's whole group, the leader's descendants included, and says what it took. */
 async function stopGroup(child: Child): Promise<void> {
   let sent = 'no signal (its group had already ended)'
-  if (groupExists(child.group)) {
+  if (exists(-child.group)) {
     signalGroup(child.group, 'SIGTERM')
     sent = 'TERM'
     if (!await groupGone(child.group, GROUP_TERM_WAIT_MS)) {
@@ -814,7 +812,7 @@ try {
     lock = fs.openSync(lockPath, 'wx')
   }
   catch (err) {
-    if (!(err instanceof Error && 'code' in err && err.code === 'EEXIST'))
+    if (errorCode(err) !== 'EEXIST')
       throw err
     refused = true
     refuse()
