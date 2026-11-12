@@ -34,7 +34,6 @@
  * --keep holds the stack after every scenario passed, and prints its
  * addresses and secrets, until interrupted.
  */
-import type { ChildProcess } from 'node:child_process'
 import type { Server } from 'node:http'
 import type { ContentRecord } from '../src/types.ts'
 import { spawn } from 'node:child_process'
@@ -62,7 +61,8 @@ const REQUEST_TIMEOUT_MS = 30_000
 const POLL_MS = 500
 const GROUP_TERM_WAIT_MS = 5_000
 const GROUP_KILL_WAIT_MS = 30_000
-const EXIT_EVENT_WAIT_MS = 5_000
+// how much of a child's output is kept, and how many lines of it a failed run prints
+const TAIL_CHARS = 16 * 1024
 const LOG_TAIL_LINES = 50
 const RECONCILE_ROUND_DELAY_MS = 1_000
 
@@ -202,15 +202,12 @@ function exists(id: number): boolean {
 
 type Child = {
   name: string
-  process: ChildProcess
   /** its process group: it is started detached, so the group is its pid */
   group: number
-  /** the last LOG_TAIL_LINES lines it printed, kept in memory only */
-  tail: string[]
+  /** the last TAIL_CHARS characters it printed, kept in memory only */
+  output: string
   /** how it ended, once it has */
   ended?: string
-  /** true for the build, which ends by itself */
-  endsByItself: boolean
 }
 
 const children: Child[] = []
@@ -222,12 +219,21 @@ function describeExit(code: number | null, signal: NodeJS.Signals | null): strin
 }
 
 /**
- * Starts a child in its own process group and holds it. Its three `error` sources (the process and its two output
- * streams, which are separate objects) get their listeners in the turn it
- * is spawned: a command that does not exist reports that one turn later,
- * and an error nobody listens to is an uncaught exception.
+ * Starts a child in its own process group and holds it. Its three `error`
+ * sources (the process and its two output streams, which are separate
+ * objects) get their listeners in the turn it is spawned: a command that
+ * does not exist reports that one turn later, and an error nobody listens
+ * to is an uncaught exception.
  */
-function start(name: string, cwd: string, command: string, args: string[], env: NodeJS.ProcessEnv, endsByItself = false): Child {
+function start({ name, cwd, command, args, env, endsByItself = false }: {
+  name: string
+  cwd: string
+  command: string
+  args: string[]
+  env: NodeJS.ProcessEnv
+  /** true for the build: its end is judged where it is awaited */
+  endsByItself?: boolean
+}): Child {
   const spawned = spawn(command, args, {
     cwd,
     env,
@@ -244,10 +250,8 @@ function start(name: string, cwd: string, command: string, args: string[], env: 
   }
   const child: Child = {
     name,
-    process: spawned,
     group: spawned.pid,
-    tail: [],
-    endsByItself,
+    output: '',
   }
 
   held.push({
@@ -258,32 +262,18 @@ function start(name: string, cwd: string, command: string, args: string[], env: 
   note(`group ${child.group} ${name}`)
   say(`Started ${name}: pid ${child.group}, process group ${child.group}`)
 
-  // Lines are cut here, not by readline: its Interface re-emits the
-  // stream's errors from itself, one more object to listen on.
+  // Both streams go into one text, so a line of one may land inside a
+  // line of the other: this is only what a failed run prints.
   for (const stream of [spawned.stdout, spawned.stderr]) {
     stream.setEncoding('utf8')
-    let partial = ''
-    const keepLine = (line: string) => {
-      child.tail.push(line)
-      if (child.tail.length > LOG_TAIL_LINES)
-        child.tail.shift()
-    }
     stream.on('data', (chunk: string) => {
-      const lines = (partial + chunk).split('\n')
-      // the last piece is an unfinished line until the next chunk says otherwise
-      partial = lines.pop() ?? ''
-      lines.forEach(keepLine)
-    })
-    stream.on('end', () => {
-      if (partial !== '')
-        keepLine(partial)
+      child.output = (child.output + chunk).slice(-TAIL_CHARS)
     })
   }
 
   spawned.on('exit', (code, signal) => {
     child.ended = describeExit(code, signal)
-    // The build's end is judged where the build is awaited. An end during
-    // the cleanup asks for a stop too, which nobody reads by then.
+    // an end during the cleanup asks for a stop too, which nobody reads by then
     if (!endsByItself)
       requestStop(`${name} ended unexpectedly (${child.ended})`)
   })
@@ -326,10 +316,7 @@ async function stopGroup(child: Child): Promise<void> {
       }
     }
   }
-  // the exit event may come a moment after the group is gone
-  for (const end = performance.now() + EXIT_EVENT_WAIT_MS; child.ended === undefined && performance.now() < end;)
-    await sleep(50)
-  say(`Stopped ${child.name}: sent ${sent} to process group ${child.group}; it ended with ${child.ended ?? 'no exit reported yet'}`)
+  say(`Stopped ${child.name}: sent ${sent} to process group ${child.group}`)
 }
 
 /** Stops one child now, ahead of the cleanup, and takes it off `held`. */
@@ -522,26 +509,32 @@ async function run(temporary: string): Promise<void> {
   step = 'starting the API'
   const emptyEnvFile = path.join(temporary, 'empty.env')
   fs.writeFileSync(emptyEnvFile, '')
-  start('api', apiDir, 'node_modules/.bin/wrangler', [
-    'dev',
-    '--port',
-    String(apiPort),
-    '--ip',
-    '127.0.0.1',
-    '--inspector-port',
-    String(inspectorPort),
-    '--inspector-ip',
-    '127.0.0.1',
-    '--var',
-    `DATABASE_URL:postgresql://local@127.0.0.1:${databasePort}/local`,
-    '--var',
-    `PREVIEW_SECRET:${previewSecret}`,
-    // an empty file, so .dev.vars and .env in that checkout are not read
-    '--env-file',
-    emptyEnvFile,
-    '--persist-to',
-    path.join(temporary, 'wrangler'),
-  ], { ...process.env, CLOUDFLARE_INCLUDE_PROCESS_ENV: 'false', WRANGLER_SEND_METRICS: 'false' })
+  start({
+    name: 'api',
+    cwd: apiDir,
+    command: 'node_modules/.bin/wrangler',
+    args: [
+      'dev',
+      '--port',
+      String(apiPort),
+      '--ip',
+      '127.0.0.1',
+      '--inspector-port',
+      String(inspectorPort),
+      '--inspector-ip',
+      '127.0.0.1',
+      '--var',
+      `DATABASE_URL:postgresql://local@127.0.0.1:${databasePort}/local`,
+      '--var',
+      `PREVIEW_SECRET:${previewSecret}`,
+      // an empty file, so .dev.vars and .env in that checkout are not read
+      '--env-file',
+      emptyEnvFile,
+      '--persist-to',
+      path.join(temporary, 'wrangler'),
+    ],
+    env: { ...process.env, CLOUDFLARE_INCLUDE_PROCESS_ENV: 'false', WRANGLER_SEND_METRICS: 'false' },
+  })
   const publishedSlugs = () => records().filter(record => record.isPublished).map(record => record.slug).toSorted()
   const apiSlugs = async (): Promise<string[]> => {
     const { status, body } = await get(`${api}/api/posts`)
@@ -564,7 +557,14 @@ async function run(temporary: string): Promise<void> {
   // with it a build reads nothing from the API
   fs.rmSync(path.join(webDir, '.next/cache/fetch-cache'), { recursive: true, force: true })
   const buildStarted = performance.now()
-  const build = start('build', webDir, 'node_modules/.bin/next', ['build'], webEnv, true)
+  const build = start({
+    name: 'build',
+    cwd: webDir,
+    command: 'node_modules/.bin/next',
+    args: ['build'],
+    env: webEnv,
+    endsByItself: true,
+  })
   const buildEnd = await ended(build, BUILD_TIMEOUT_MS)
   // Released now rather than in the cleanup: once its group is empty, the
   // number may be given to another process while the stack is held.
@@ -575,13 +575,19 @@ async function run(temporary: string): Promise<void> {
   say(`Build finished in ${Math.round((performance.now() - buildStarted) / 1000)} s`)
 
   step = 'starting the frontend'
-  start('web', webDir, 'node_modules/.bin/next', [
-    'start',
-    '-p',
-    String(webPort),
-    '-H',
-    '127.0.0.1',
-  ], webEnv)
+  start({
+    name: 'web',
+    cwd: webDir,
+    command: 'node_modules/.bin/next',
+    args: [
+      'start',
+      '-p',
+      String(webPort),
+      '-H',
+      '127.0.0.1',
+    ],
+    env: webEnv,
+  })
   await ready('The frontend', async () => (await get(new URL('/contract.json', web))).status === 200)
   stopIfRequested()
   say(`Frontend ready: ${browserAddress}`)
@@ -743,7 +749,7 @@ async function run(temporary: string): Promise<void> {
 
 /** Releases everything held, newest first, and says how the run went. Runs once, from the `finally`. */
 async function cleanUp(failure: string | undefined): Promise<number> {
-  // run() returned: every scenario passed, and a stack held for --keep was ended by a signal
+  // nothing threw: every scenario passed, and with --keep the stack was held until a signal
   const passed = failure === undefined
   // read now: the children this stops ask for a stop as they end
   const stopped = stopping.signal.aborted
@@ -757,8 +763,8 @@ async function cleanUp(failure: string | undefined): Promise<number> {
   // a failed run shows what the children said; CI has no temporary files to look at
   if (!passed && interruptedBy === undefined) {
     for (const child of children) {
-      say(`The last ${child.tail.length} lines of ${child.name}:`)
-      for (const line of child.tail)
+      say(`The end of what ${child.name} printed:`)
+      for (const line of child.output.trimEnd().split('\n').slice(-LOG_TAIL_LINES))
         console.info(`    ${line}`)
     }
   }
