@@ -25,6 +25,11 @@ describe('frontendFromEnv', () => {
     vi.stubEnv('FRONTEND_URL', 'http://localhost:3000')
     expect(frontendFromEnv().href).toBe('http://localhost:3000/')
   })
+
+  it('names the variable when it is not an http(s) URL', () => {
+    vi.stubEnv('FRONTEND_URL', 'localhost:3000')
+    expect(() => frontendFromEnv()).toThrow('FRONTEND_URL is not an http(s) URL: "localhost:3000"')
+  })
 })
 
 describe('localFrontendFromEnv', () => {

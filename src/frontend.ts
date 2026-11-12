@@ -30,7 +30,21 @@ const PRODUCTION_FRONTEND = 'https://tianwei.io'
  * machine (say http://localhost:3000). The deploy workflow does not set it.
  */
 export function frontendFromEnv(): URL {
-  return new URL(readEnv('FRONTEND_URL') ?? PRODUCTION_FRONTEND)
+  const value = readEnv('FRONTEND_URL')
+  return value === undefined
+    ? new URL(PRODUCTION_FRONTEND)
+    : parseFrontendUrl(value)
+}
+
+/** FRONTEND_URL as a URL; anything but an http(s) URL is refused, naming the variable. */
+function parseFrontendUrl(value: string): URL {
+  // `localhost:3000` parses, with `localhost:` as its scheme
+  const url = URL.canParse(value)
+    ? new URL(value)
+    : undefined
+  if (url === undefined || (url.protocol !== 'http:' && url.protocol !== 'https:'))
+    throw new Error(`FRONTEND_URL is not an http(s) URL: "${value}"`)
+  return url
 }
 
 /**
@@ -42,12 +56,7 @@ export function localFrontendFromEnv(): URL | undefined {
   const value = readEnv('FRONTEND_URL')
   if (value === undefined)
     return undefined
-  // `localhost:3000` parses, with `localhost:` as its scheme
-  const url = URL.canParse(value)
-    ? new URL(value)
-    : undefined
-  if (url === undefined || (url.protocol !== 'http:' && url.protocol !== 'https:'))
-    throw new Error(`FRONTEND_URL is not an http(s) URL: "${value}"`)
+  const url = parseFrontendUrl(value)
   return url.hostname === '127.0.0.1' || url.hostname === 'localhost'
     ? url
     : undefined
