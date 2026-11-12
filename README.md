@@ -153,6 +153,7 @@ A push to `main` that touches content or sync code runs `.github/workflows/deplo
    Each request has 60 s, the whole body included. A round collects every problem; if there is any, the round runs again 5 s later, three rounds in all. A failure names the URL and whether it answered an error, timed out or still shows a previous version (with the expected and the reported hash); the log keeps `x-vercel-cache` and `age` for every request.
 
 ```mermaid
+%%{init: {"sequence": {"mirrorActors": false, "diagramMarginY": 72}}}%%
 sequenceDiagram
   participant GH as Content deploy
   participant FE as tianwei.io
