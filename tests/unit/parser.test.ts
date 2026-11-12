@@ -46,7 +46,7 @@ describe('parseMdxFile', () => {
       createdAt: new Date(Date.UTC(2025, 9, 23, 4)),
       updatedAt: null,
       isPublished: true,
-      // gray-matter preserves one leading newline after the frontmatter block
+      // the body keeps the blank line after the frontmatter block
       content: '\n# Heading\n\nBody text.\n',
     })
   })
@@ -210,6 +210,16 @@ describe('parseMdxFile', () => {
   it('names the problem when the frontmatter is YAML but not a mapping', () => {
     expect(() => parseDoc('---\njust a sentence\n---\n\nBody.\n'))
       .toThrow(/Invalid frontmatter YAML in ".*a\.mdx": frontmatter must be a YAML mapping of keys to values/)
+  })
+
+  it('names the problem when the frontmatter is empty', () => {
+    expect(() => parseDoc('---\n---\n\nBody.\n'))
+      .toThrow(/frontmatter must be a YAML mapping of keys to values/)
+  })
+
+  it('refuses frontmatter that is never closed', () => {
+    expect(() => parseDoc('---\ntitle: No end\n\nBody.\n'))
+      .toThrow(/has no closing --- line after its frontmatter/)
   })
 
   it('names the file when the YAML itself is malformed', () => {
