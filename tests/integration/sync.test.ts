@@ -1,16 +1,18 @@
 import fs from 'node:fs'
 import path from 'node:path'
+import { drizzle } from 'drizzle-orm/pglite'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import * as schema from '../../drizzle/schema.ts'
 import { posts } from '../../drizzle/schema.ts'
+import { openLocalDb } from '../../src/localDb.ts'
 import { syncPosts } from '../../src/sync.ts'
 import { makeContentDir, mdxDoc } from '../helpers/fixture-content.ts'
-import { createTestDb } from '../helpers/test-db.ts'
 
 let root = '' // '' = not created; guards afterEach when makeContentDir throws
-let testDb: Awaited<ReturnType<typeof createTestDb>>
+let testDb: Awaited<ReturnType<typeof openLocalDb>>
 
 beforeEach(async () => {
-  testDb = await createTestDb()
+  testDb = await openLocalDb()
 })
 
 afterEach(async () => {
@@ -43,11 +45,11 @@ describe('syncPosts', () => {
       title: 'Alpha',
       author: 'Test Author',
       isPublished: true,
+      createdAt: new Date(Date.UTC(2024, 0, 5, 5)), // EST midnight
+      // updatedAt is optional: absent in frontmatter means NULL in the DB
+      updatedAt: null,
     })
-    expect(rows[0]!.createdAt.getTime()).toBe(Date.UTC(2024, 0, 5, 5)) // EST midnight
-    // updatedAt is optional — absent in frontmatter means NULL in the DB
-    expect(rows[0]!.updatedAt).toBeNull()
-    // unpublished posts are stored too — visibility filtering is the API's job
+    // unpublished posts are stored too: visibility filtering is the API's job
     expect(rows[1]).toMatchObject({ slug: 'beta', isPublished: false })
   })
 
@@ -57,13 +59,15 @@ describe('syncPosts', () => {
     })
     await syncPosts(testDb.db, { contentRoot: root })
     let [row] = await allRows()
-    expect(row!.updatedAt?.getTime()).toBe(Date.UTC(2024, 1, 1, 5)) // EST midnight
+    expect(row).toMatchObject({
+      updatedAt: new Date(Date.UTC(2024, 1, 1, 5)),
+    }) // EST midnight
 
     // removing the field from frontmatter must null the column on re-sync
     fs.writeFileSync(path.join(root, 'articles/alpha.mdx'), mdxDoc({ createdAt: '2024-01-05' }))
     await syncPosts(testDb.db, { contentRoot: root });
     [row] = await allRows()
-    expect(row!.updatedAt).toBeNull()
+    expect(row).toMatchObject({ updatedAt: null })
   })
 
   it('is idempotent and preserves ids across re-runs', async () => {
@@ -84,7 +88,9 @@ describe('syncPosts', () => {
   })
 
   it('updates changed posts in place', async () => {
-    root = makeContentDir({ 'articles/alpha.mdx': mdxDoc({ title: 'Alpha' }) })
+    root = makeContentDir({
+      'articles/alpha.mdx': mdxDoc({ title: 'Alpha' }),
+    })
     await syncPosts(testDb.db, { contentRoot: root })
     const [original] = await allRows()
 
@@ -95,10 +101,13 @@ describe('syncPosts', () => {
     await syncPosts(testDb.db, { contentRoot: root })
 
     const [updated] = await allRows()
-    expect(updated!.id).toBe(original!.id)
-    expect(updated!.title).toBe('Alpha v2')
-    expect(updated!.description).toBe('updated')
-    expect(updated!.content).toBe('\nNew body.\n')
+    expect(original).toBeDefined()
+    expect(updated).toMatchObject({
+      id: original?.id,
+      title: 'Alpha v2',
+      description: 'updated',
+      content: '\nNew body.\n',
+    })
   })
 
   it('deletes rows whose files were removed', async () => {
@@ -117,7 +126,9 @@ describe('syncPosts', () => {
   })
 
   it('handles file renames without leaving orphaned rows', async () => {
-    root = makeContentDir({ 'articles/old-name.mdx': mdxDoc() })
+    root = makeContentDir({
+      'articles/old-name.mdx': mdxDoc(),
+    })
     await syncPosts(testDb.db, { contentRoot: root })
 
     fs.renameSync(
@@ -131,7 +142,9 @@ describe('syncPosts', () => {
   })
 
   it('leaves the database untouched when any file is invalid', async () => {
-    root = makeContentDir({ 'articles/alpha.mdx': mdxDoc({ title: 'Alpha' }) })
+    root = makeContentDir({
+      'articles/alpha.mdx': mdxDoc({ title: 'Alpha' }),
+    })
     await syncPosts(testDb.db, { contentRoot: root })
     const before = await allRows()
 
@@ -142,7 +155,9 @@ describe('syncPosts', () => {
   })
 
   it('refuses an empty reconcile unless allowEmpty is set', async () => {
-    root = makeContentDir({ 'articles/alpha.mdx': mdxDoc() })
+    root = makeContentDir({
+      'articles/alpha.mdx': mdxDoc(),
+    })
     await syncPosts(testDb.db, { contentRoot: root })
 
     fs.rmSync(path.join(root, 'articles/alpha.mdx'))
@@ -155,8 +170,29 @@ describe('syncPosts', () => {
     expect(await allRows()).toHaveLength(0)
   })
 
+  it('refuses a reconcile that leaves only drafts unless allowEmpty is set', async () => {
+    root = makeContentDir({
+      'articles/alpha.mdx': mdxDoc(),
+    })
+    await syncPosts(testDb.db, { contentRoot: root })
+
+    // unpublishing the last post empties the site as surely as deleting it
+    fs.writeFileSync(path.join(root, 'articles/alpha.mdx'), mdxDoc({ isPublished: false }))
+    await expect(syncPosts(testDb.db, { contentRoot: root })).rejects.toThrow('no published post under')
+    expect(await allRows()).toMatchObject([
+      { slug: 'alpha', isPublished: true },
+    ])
+
+    await syncPosts(testDb.db, { contentRoot: root, allowEmpty: true })
+    expect(await allRows()).toMatchObject([
+      { slug: 'alpha', isPublished: false },
+    ])
+  })
+
   it('rejects duplicate slugs before touching the database', async () => {
-    root = makeContentDir({ 'articles/alpha.mdx': mdxDoc({ title: 'Original' }) })
+    root = makeContentDir({
+      'articles/alpha.mdx': mdxDoc({ title: 'Original' }),
+    })
     await syncPosts(testDb.db, { contentRoot: root })
 
     // second category with the same filename → same slug
@@ -165,6 +201,35 @@ describe('syncPosts', () => {
 
     await expect(syncPosts(testDb.db, { contentRoot: root })).rejects.toThrow(/Duplicate slugs/)
     const [row] = await allRows()
-    expect(row!.title).toBe('Original')
+    expect(row).toMatchObject({ title: 'Original' })
+  })
+
+  it('takes a transaction-scoped advisory lock before it writes', async () => {
+    // PGlite is a single connection, so two writers cannot actually contend
+    // here; pin the two properties the serialization relies on instead.
+    const queries: string[] = []
+    const db = drizzle(testDb.client, {
+      schema,
+      logger: {
+        logQuery: (query) => {
+          queries.push(query)
+        },
+      },
+    })
+    root = makeContentDir({
+      'articles/alpha.mdx': mdxDoc(),
+    })
+    await syncPosts(db, { contentRoot: root })
+
+    // 1. the lock is the transaction's first statement
+    // (transaction control is dropped: whether the driver logs begin/commit
+    // is a driver detail, not part of what is being pinned)
+    const statements = queries.filter(query => !/^(?:begin|commit|rollback)\b/i.test(query))
+    expect(statements[0]).toMatch(/^select pg_advisory_xact_lock\(\$1\)$/)
+    // 2. commit releases it: nothing is left held on the session
+    const { rows } = await testDb.client.query(`select count(*)::int as held from pg_locks where locktype = 'advisory'`)
+    expect(rows).toEqual([
+      { held: 0 },
+    ])
   })
 })

@@ -1,6 +1,6 @@
 # ADR-0001: Transactional reconcile instead of clear-then-reinsert
 
-- **Status**: Accepted (2026-07)
+- **Status**: Accepted (2026-07); writer lock added 2026-10; empty guard counts published posts since 2026-11
 - **Repos affected**: tianwei-io-content (writer), tianwei-io-api (reader)
 
 ## Context
@@ -9,7 +9,7 @@ The original production sync deleted every row in `posts`, then re-inserted
 posts one by one, with no transaction. Two consequences:
 
 1. The live API could observe an **empty or partially-populated table**
-   during every deploy — readers got whatever happened to be committed at
+   during every deploy: readers got whatever happened to be committed at
    that instant.
 2. Serial ids were reissued on every deploy, and a mid-loop failure left
    the database in a permanently partial state.
@@ -29,19 +29,29 @@ All writes go through a single entry point, `src/sync.ts#syncPosts`:
 - **One transaction, reconcile semantics.** Upsert all parsed records
   keyed on `slug` (ids of unchanged posts stay stable) and delete rows
   whose slug no longer exists on disk. Under READ COMMITTED, readers see
-  either the previous state or the new state — never an intermediate one.
-- **Empty-parse guard.** A run that would delete every post refuses to
-  execute unless explicitly flagged (`--allow-empty`), so a bad checkout
-  or wrong path can never wipe production.
+  either the previous state or the new state, never an intermediate one.
+- **One writer at a time.** The transaction's first statement takes
+  `pg_advisory_xact_lock` on a fixed key (`SYNC_LOCK_KEY`), so a second
+  sync (a manual `sync:prod` overlapping a deploy, or the local watcher)
+  waits for the first to commit and then writes over the committed
+  rows. Transaction-scoped rather than session-scoped: commit or rollback
+  always releases it, and it works through Neon's transaction-mode pooler.
+- **Empty-site guard.** A run that would leave no published post (no
+  files, or only drafts) refuses to execute unless explicitly flagged
+  (`--allow-empty`), so a bad checkout or wrong path can never empty
+  the site. The flag does not make an empty site valid elsewhere: the
+  frontend refuses to build and the API's deploy check fails without a
+  published post.
 - **The watcher collapses event bursts** into one debounced reconcile,
-  serialized by a running/pending latch — overlapping writes are
+  serialized by a running/pending latch; overlapping writes are
   structurally impossible.
 
 ## Consequences
 
-- Deploys are atomic from the reader's perspective; the frontend's cache
-  warming never fetches a half-synced catalog.
-- Renames, deletions and edits all reduce to "reconcile disk vs table" —
+- Deploys are atomic from the reader's perspective; the API read the
+  frontend makes before it expires its cache never sees a half-synced
+  catalog.
+- Renames, deletions and edits all reduce to "reconcile disk vs table";
   there is no per-event mutation logic left to get wrong.
 - A full reconcile on every change is O(total posts), which is trivially
   cheap at blog scale and stays acceptable for thousands of posts.

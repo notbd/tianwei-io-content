@@ -1,66 +1,38 @@
-import process from 'node:process'
-import dotenv from 'dotenv'
+/**
+ * The content deploy's last step: makes the frontend serve what was just
+ * synced, then proves it does.
+ *
+ * 1. Revalidate: the frontend reads the content through the API and, only
+ *    if every read worked, expires its content cache.
+ * 2. A minute later, revalidate again. A page that was rendering while the
+ *    sync committed may have read the old rows and stored its result after
+ *    the first expiry, where it would stay until the next sync. Such a
+ *    render ends within about 40 s of the sync (tianwei.io ADR-0002 says
+ *    why), so by now any such write has landed, and this expiry removes it.
+ * 3. Reconcile: every page answers, and each post page reports the hash of
+ *    the body synced here (src/frontend.ts reconcile). A page that failed
+ *    to render keeps serving its previous version with a 200, so only the
+ *    hash shows that a change did not go live.
+ */
+import { setTimeout as sleep } from 'node:timers/promises'
+import { loadLocalEnv, requireEnv } from '../src/env.ts'
+import { frontendFromEnv, reconcile, revalidateFrontend } from '../src/frontend.ts'
 
-dotenv.config({ path: '.env.local', quiet: true })
+loadLocalEnv()
 
-const FRONTEND_URL = process.env.FRONTEND_URL
-const REVALIDATION_SECRET = process.env.REVALIDATION_SECRET
+const SECOND_PASS_DELAY_MS = 60_000
 
-function assertEnv(name: string, value: string | undefined) {
-  if (!value) {
-    throw new Error(`[env] Missing required variable: ${name}`)
-  }
-}
+const frontend = frontendFromEnv()
+const secret = requireEnv('REVALIDATION_SECRET')
+console.info(`[revalidate] Frontend: ${frontend.origin}`)
 
-async function triggerRevalidation(frontend: URL, secret: string) {
-  const endpoint = new URL('/api/revalidate', frontend)
+await revalidateFrontend(frontend, secret)
+console.info('[revalidate] Expired the posts tag')
 
-  const response = await fetch(endpoint, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      'authorization': `Bearer ${secret}`,
-    },
-    body: JSON.stringify({ tags: ['posts'] }),
-    // a hung frontend must fail the deploy step, not stall it for minutes
-    signal: AbortSignal.timeout(60_000),
-  })
+console.info(`[revalidate] Second pass in ${SECOND_PASS_DELAY_MS / 1000} s, after any render that read the old rows has stored its result`)
+await sleep(SECOND_PASS_DELAY_MS)
+await revalidateFrontend(frontend, secret)
+console.info('[revalidate] Expired the posts tag again')
 
-  const rawBody = await response.text()
-
-  if (!response.ok) {
-    throw new Error(`[revalidate] Failed (${response.status}): ${rawBody}`)
-  }
-
-  let payload: { success?: boolean, error?: string }
-  try {
-    payload = JSON.parse(rawBody) as { success?: boolean, error?: string }
-  }
-  catch {
-    // e.g. a proxy/CDN HTML error page with a 2xx status
-    throw new Error(`[revalidate] Non-JSON response (${response.status}) from ${endpoint}: ${rawBody.slice(0, 300)}`)
-  }
-
-  // A 207 Multi-Status (revalidated but warming failed) counts as ok by
-  // response.ok — check the payload so a cold cache fails the deploy loudly.
-  if (payload.success !== true) {
-    throw new Error(`[revalidate] Partial failure (${response.status}): ${JSON.stringify(payload)}`)
-  }
-
-  console.info('[revalidate] Success:', payload)
-}
-
-async function main() {
-  assertEnv('FRONTEND_URL', FRONTEND_URL)
-  assertEnv('REVALIDATION_SECRET', REVALIDATION_SECRET)
-
-  const frontendUrl = new URL(FRONTEND_URL!)
-  await triggerRevalidation(frontendUrl, REVALIDATION_SECRET!)
-
-  console.info('[revalidate] Completed.')
-}
-
-main().catch((err) => {
-  console.error(err)
-  process.exitCode = 1
-})
+const checked = await reconcile(frontend)
+console.info(`[reconcile] All ${checked} requests answered as expected; every post page shows the synced body`)

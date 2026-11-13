@@ -1,7 +1,17 @@
+import fs from 'node:fs'
 import { PGlite } from '@electric-sql/pglite'
 import { drizzle } from 'drizzle-orm/pglite'
 import { migrate } from 'drizzle-orm/pglite/migrator'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { z } from 'zod'
+
+// every migration the committed history lists
+const MIGRATION_COUNT = z.object({
+  entries: z.array(z.unknown()),
+})
+  .parse(JSON.parse(fs.readFileSync('drizzle/migrations/meta/_journal.json', 'utf-8')))
+  .entries
+  .length
 
 // The DDL that exists in production today (from drizzle-kit pull),
 // used to prove the migration chain upgrades a live database in place.
@@ -117,13 +127,13 @@ describe('migration chain', () => {
     const journal = await client.query<{ count: string }>(
       `SELECT count(*) FROM drizzle.__drizzle_migrations`,
     )
-    expect(Number(journal.rows[0]?.count)).toBe(4)
+    expect(Number(journal.rows[0]?.count)).toBe(MIGRATION_COUNT)
 
     // a second migrate() run is a no-op
     await runMigrations()
     const again = await client.query<{ count: string }>(
       `SELECT count(*) FROM drizzle.__drizzle_migrations`,
     )
-    expect(Number(again.rows[0]?.count)).toBe(4)
+    expect(Number(again.rows[0]?.count)).toBe(MIGRATION_COUNT)
   })
 })

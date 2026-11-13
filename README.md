@@ -2,7 +2,6 @@
 <samp>
 <h1>tianwei-io-content</h1>
 
-[![CI](https://github.com/notbd/tianwei-io-content/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/notbd/tianwei-io-content/actions/workflows/ci.yml)
 [![Deploy](https://github.com/notbd/tianwei-io-content/actions/workflows/deploy-content.yml/badge.svg?branch=main)](https://github.com/notbd/tianwei-io-content/actions/workflows/deploy-content.yml)
 
 The content engine of my personal website [tianwei.io](https://tianwei.io).
@@ -11,98 +10,171 @@ The content engine of my personal website [tianwei.io](https://tianwei.io).
 
 - **Runtime**: [Node.js](https://nodejs.org) + [TypeScript](https://www.typescriptlang.org)
 - **ORM**: [Drizzle ORM](https://orm.drizzle.team)
-- **Database**: [PostgreSQL](https://www.postgresql.org)
-- **Remote DB Host**: [Neon](https://neon.tech)
+- **Database**: [PostgreSQL](https://www.postgresql.org) on [Neon](https://neon.com)
 - **Content Format**: [MDX](https://mdxjs.com) files with frontmatter
-- **Testing**: [Vitest](https://vitest.dev) + [PGlite](https://pglite.dev) (in-memory Postgres)
-- **Infrastructure**: [Docker](https://www.docker.com) Compose (local Postgres), [GitHub Actions](https://docs.github.com/en/actions) (CI + remote sync)
+- **Testing and local database**: [Vitest](https://vitest.dev) + [PGlite](https://pglite.dev) (Postgres in the Node process)
+- **Infrastructure**: [GitHub Actions](https://docs.github.com/en/actions) (CI and the deploy)
 
 <h2>Site Architecture</h2>
 
-- **[Frontend](https://github.com/notbd/tianwei.io)**: a Next.js application rendering content from the API with static generation and on-demand revalidation.
-- **[API Layer](https://github.com/notbd/tianwei-io-api)**: a Hono service on Cloudflare Workers serving content data from the content engine via REST endpoints.
-- **[Content Engine](https://github.com/notbd/tianwei-io-content)**: this repo — stores, parses and syncs MDX to a remote PostgreSQL database.
+This is the content engine, one of the three repos behind the site, next to the [frontend](https://github.com/notbd/tianwei.io) and the [API](https://github.com/notbd/tianwei-io-api). How the three fit together, with a diagram, is in [the frontend's README](https://github.com/notbd/tianwei.io/blob/main/README.md).
 
-<h2>Overview</h2>
+<h2>How It Works</h2>
 
-![Overview Visualization](./resources/overview-2.png)
+This repo owns the posts, the database schema and every write; the API only reads. A sync (`src/sync.ts`) makes the `posts` table match the files in `content/`:
 
-> Historical sketch from the original design — some details have since
-> evolved (category is now `varchar`, `updated_at` exists, sync is one
-> transactional reconcile in `src/`). The sections below are the current
-> source of truth.
+- **Validate first**: every file is parsed before the database is touched, and one invalid file stops the run, naming the file and line. Frontmatter is YAML under a strict schema: a misspelled key such as `updateAt` is an error, not ignored, and a `---js` fence is refused before anything in it runs. Titles and descriptions must be valid XML text (they go into the RSS feed), and neither the author nor the body may contain NUL bytes (Postgres cannot store them). The body is parsed with the syntax the frontend uses, MDX with GFM, and must not contain any JavaScript.
+- **Checked against the frontend**: `pnpm check:contract` holds every post, drafts included, to the frontend's [`/contract.json`](https://tianwei.io/contract.json): the components a post may use and their attributes, and the time zone dates are anchored to. Pull requests run it, and the deploy runs it before writing anything ([tianwei.io ADR-0006](https://github.com/notbd/tianwei.io/blob/main/docs/adr/0006-cross-repo-releases.md)).
+- **One transaction**: posts are upserted by slug, so ids stay stable, and rows whose files are gone are deleted. Readers never see a half-synced table ([ADR-0001](./docs/adr/0001-transactional-reconcile-sync.md)).
+- **Guard rails**: concurrent syncs wait on a Postgres advisory lock, and a sync that would leave no published post is refused unless `--allow-empty` is passed, so a bad checkout cannot empty production. `--allow-empty` only lets the sync through: the frontend still refuses to build, and the API's deploy check still fails, without a published post.
+- **No production database by accident**: `DATABASE_URL` comes only from the process environment, and only `pnpm db:migrate` and `pnpm sync:prod` read it. A `.env.local` or `.env` that sets it is refused (`loadLocalEnv()` in `src/env.ts`): with the URL in a file, those two commands would use that database without being told to. `.env` is checked as well because `drizzle-kit` loads it by itself.
+- **Dates**: `createdAt` and `updatedAt` are calendar dates in `America/New_York`, stored as that day's midnight there, whatever the machine's time zone ([ADR-0003](./docs/adr/0003-content-time-zone.md)).
+- **Migrations**: the schema is in `drizzle/`, and the migration history is committed and applied by the deploy, never generated on the fly ([ADR-0002](./docs/adr/0002-committed-migration-history.md)).
+
+<h2>Writing a Post</h2>
+
+```shell
+pnpm new-post "My Post Title"          # creates content/articles/my-post-title.mdx
+pnpm new-post "My Post Title" notes    # in another category
+```
+
+The folder name is the category and the filename is the slug, unique across categories. A new post starts as a draft, with frontmatter that already passes the parser:
+
+| Key | Required | Value |
+| --- | --- | --- |
+| `title` | yes | The post title |
+| `description` | no | One sentence for the post list, the feed and link previews |
+| `createdAt` | yes | Publish date, `yyyy-MM-dd` |
+| `updatedAt` | no | Last meaningful update, `yyyy-MM-dd`, not before `createdAt` |
+| `author` | yes | Author name |
+| `isPublished` | yes | `false` keeps the post off the site |
+
+The body is Markdown plus the components the frontend lists in its [`/contract.json`](https://tianwei.io/contract.json), with string attributes; no JavaScript and no other JSX. Today that is `<MdxImage>`, for images hosted on Cloudinary, and `<Link>`, for links within the site:
+
+```mdx
+<MdxImage src="<cloudinary-id>" alt="..." width="1024" height="768" title="A caption" sizeCategory="xl" />
+
+See <Link href="/posts">every post</Link>.
+```
+
+`title` (a caption under the image) and `sizeCategory` (the image's maximum width, `sm` to `3xl`, `lg` by default) are optional; the contract is the authority. Open a pull request: CI parses every post and checks it against the contract (`pnpm check:contract`), so a broken one fails there and not in production. Merging to `main` syncs it; it shows on the site once `isPublished` is `true`, and until then the frontend's draft preview can show it.
 
 <h2>Layout</h2>
 
 | Path | Purpose |
 | --- | --- |
-| `content/{category}/{slug}.mdx` | The content itself; folder name → category, filename → slug |
-| `src/` | Library code: frontmatter parsing, transactional sync, file watcher |
-| `drizzle/` | Database schema + committed migration history (`migrations/`) |
-| `scripts/` | Thin CLI entry points (local dev, prod sync, frontend revalidation) |
-| `tests/` | Vitest suite — unit (parser) + integration (sync against PGlite) |
-
-<h2>Sync Semantics</h2>
-
-A sync is a single **transactional reconcile** (`src/sync.ts`):
-
-- Every `.mdx` file is parsed and validated first — any invalid file aborts the run before the database is touched.
-- Inside one transaction: all parsed posts are upserted (keyed on slug, so ids stay stable) and rows whose files no longer exist are deleted.
-- Readers never observe an empty or partially-synced table; renames can't leave orphaned rows.
-- A parse that yields zero posts is rejected unless `--allow-empty` is passed, so a bad checkout can never wipe the production table.
-- `createdAt` frontmatter is a calendar date authored in **`CONTENT_TIME_ZONE`** (`America/New_York`, see `src/config.ts`) and stored as the UTC instant of that zone's midnight — deterministic regardless of machine timezone. Optional `updatedAt` follows the same rules and must not precede `createdAt`. See [ADR-0003](./docs/adr/0003-content-time-zone.md).
-
-Design records live in [`docs/adr/`](./docs/adr/).
+| `content/{category}/{slug}.mdx` | The posts |
+| `src/` | Parsing and validation, the contract check, the transactional sync, the file watcher, the deploy's calls to the frontend, the local database and its endpoint |
+| `drizzle/` | Database schema and the committed migration history (`migrations/`) |
+| `scripts/` | Thin CLI entry points behind the `pnpm` scripts; `rehearse.ts` is the exception, it orchestrates the three checkouts |
+| `tests/` | Unit tests, and integration tests (migrations, sync, watcher, the database endpoint) on PGlite |
 
 <h2>Local Run</h2>
 
-Prerequisites: **Node.js ≥ 22**, **pnpm 10**, and **Docker**.
+Prerequisites: **Node.js 26** (see `.nvmrc`) and **pnpm 10**. No Docker, and no database to install.
 
 ```shell
 git clone git@github.com:notbd/tianwei-io-content.git
 cd tianwei-io-content
-cp .env.example .env.local # then fill in values
 pnpm install
 
-# Start local Postgres in Docker, sync content, and watch for changes
-pnpm dev:up
-
-# After finishing, shut everything down cleanly
-pnpm dev:down
+# Build the database in memory from the migrations, sync every post, then re-sync on each save
+pnpm dev
 ```
 
-After `pnpm dev:up`:
+The database lives in this process and is rebuilt from the files on every start ([ADR-0004](./docs/adr/0004-in-process-local-database.md)). `pnpm dev` serves it on `127.0.0.1:5431`, where the API's `wrangler dev` reads it with its production driver. The whole site on one machine is three terminals:
 
-- A fresh Postgres container is started and exposed at `localhost:5431`.
-- All `.mdx` files are reconciled into the `posts` table.
-- A watcher (chokidar, debounced) re-reconciles on every content change.
+| Checkout | Command | Listens on |
+| --- | --- | --- |
+| this repo | `pnpm dev` | `127.0.0.1:5431` (the database endpoint) |
+| [tianwei-io-api](https://github.com/notbd/tianwei-io-api) | `pnpm dev`, with the `DATABASE_URL` its `.dev.vars.example` gives | `127.0.0.1:8787` |
+| [tianwei.io](https://github.com/notbd/tianwei.io) | `CONTENT_API_URL=http://127.0.0.1:8787 pnpm dev` | `localhost:3000` |
 
-<h2>Scripts</h2>
+With `FRONTEND_URL=http://localhost:3000` in `.env.local`, and the same `REVALIDATION_SECRET` as the frontend's, every sync also expires that frontend's cache, so a reload shows the save.
 
 | Script | Purpose |
 | --- | --- |
-| `pnpm dev:up` / `dev:down` / `dev:reset` | Local Postgres lifecycle + sync + watch |
-| `pnpm content:sync` | One-shot local reconcile (no watcher) |
-| `pnpm sync:prod` | Production reconcile (requires `DATABASE_URL`) |
-| `pnpm db:generate` / `db:migrate` | Generate a migration from schema changes / apply pending migrations |
-| `pnpm frontend:revalidate` | Ask the frontend to revalidate its content cache |
+| `pnpm dev [--allow-empty]` | The local database, its endpoint, a sync, and a re-sync on each save |
+| `pnpm rehearse [--keep]` | Rehearse a release against the three checkouts on this machine (below) |
+| `pnpm new-post "Title" [category]` | Scaffold a draft (`isPublished: false`, today's date in `America/New_York`) that already passes the parser; refuses a slug any post already has |
+| `pnpm sync:prod` | Sync the database that `DATABASE_URL` points to, set for this one command (`DATABASE_URL=... pnpm sync:prod`); stops without it. The deploy runs it against production |
+| `pnpm db:generate` / `db:migrate` | Generate a migration from schema changes / apply pending migrations to the database that `DATABASE_URL` points to |
+| `pnpm check:contract [--require]` | Check every post, drafts included, against the frontend's `/contract.json`; without `--require`, a frontend with no contract to give only warns |
+| `pnpm frontend:revalidate` | Revalidate the frontend twice, then reconcile: every page must answer and each post page must show the body synced here |
 | `pnpm lint` / `typecheck` / `test` | Quality gates (same as CI) |
 
-<h2>Env Configuration</h2>
+<h3>Rehearsing a release</h3>
 
-See `.env.example` for the full annotated list. Locally, `LOCAL_*` variables drive the Docker Postgres. In CI, the deploy workflow maps repository secrets to env: `PROD_REMOTE_DATABASE_URL` → `DATABASE_URL`, plus `FRONTEND_URL` and `REVALIDATION_SECRET`.
+`pnpm rehearse` plays a content deploy against the three checkouts as they are on disk: this one, `../tianwei-io-api` and `../tianwei.io` (or `API_DIR` and `WEB_DIR`), each with its dependencies installed. It starts the database, the API (`wrangler dev`) and a production build of the frontend on ports it picks, then runs the deploy's own code through eight scenarios: the contract check, a sync, a reconcile that must fail before the cache is expired and pass after, a new post, an API that cannot read the database, a post that passes the contract but fails to render, and the way back. The exit code is 0 only when every scenario passes.
 
-<h2>Content Sync to Prod</h2>
+It cannot reach production: the three services listen on `127.0.0.1` only, both secrets are made up for the run, and it loads neither this repo's `.env.local` nor the API's `.dev.vars`. `next build` still loads the frontend checkout's own env files, but the rehearsal sets the API address and both secrets over them.
 
-Production sync is fully automated:
+- **It needs the frontend's checkout to itself.** It runs `next build` there, so from its start until it ends (or, with `--keep`, until it holds the stack) nothing else may use that checkout's `.next`: no `next start`, screenshots or e2e. A lock in `.next/cache` keeps a second rehearsal out, and only that. The build needs `NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME`, from the environment or that checkout's `.env.local`.
+- **`--keep`** holds the stack once every scenario has passed, and prints its addresses, both secrets and a draft's slug, for a manual pass or the frontend's e2e suite. The frontend's address is printed as `localhost`: Next rewrites `127.0.0.1` to `localhost` in its redirects, so the draft preview works only when the browser starts there.
+- **Stopping**: Ctrl-C asks for a stop, and the run cleans up after itself (its children, the lock, its temporary directory). A step that runs the deploy's own code (a sync, the contract check, a revalidation, a reconcile) is not interrupted; the run stops when it returns, which locally takes a few seconds. `kill -9 <pid>` ends it at once and cleans up nothing: the next rehearsal refuses to start, prints what the lock recorded and says how to clear it.
 
-- CI (`.github/workflows/ci.yml`) runs lint, typecheck and tests on every push and pull request.
-- On every push to `main` touching content or sync code, `.github/workflows/deploy-content.yml` re-runs the checks, applies pending migrations (`drizzle-kit migrate` — the committed history under `drizzle/migrations/`), performs the transactional reconcile against Neon, and revalidates the frontend cache. Deploys are serialized via a concurrency group.
+<h2>Configuration</h2>
 
-Result: the **remote database is always in sync** with the MDX content stored in the `main` branch of this repo.
+| Variable | Purpose |
+| --- | --- |
+| `DATABASE_URL` | A remote database for one command, from the process environment only (`DATABASE_URL=... pnpm sync:prod`); a `.env.local` or `.env` that sets it is refused. Only `pnpm sync:prod` and `pnpm db:migrate` connect to it, and both stop without it; `pnpm dev` and `pnpm rehearse` never do |
+| `REVALIDATION_SECRET` | Bearer token for the frontend's `/api/revalidate` (must match the frontend's) |
+| `FRONTEND_URL` | Points `pnpm check:contract` and `pnpm frontend:revalidate` at a frontend other than `https://tianwei.io`, such as `http://localhost:3000`. When its host is `localhost` or `127.0.0.1`, `pnpm dev` also expires that frontend's cache after every sync. `pnpm rehearse` does not read it |
+
+`.env.example` explains each one; `pnpm dev` needs none of them. The deploy workflow reads two repository secrets: `PROD_REMOTE_DATABASE_URL`, passed as `DATABASE_URL`, and `REVALIDATION_SECRET`.
+
+<h2>Quality Gates</h2>
+
+```shell
+pnpm lint
+pnpm typecheck
+pnpm test   # unit tests; migrations, sync, watcher and the database endpoint on PGlite
+```
+
+CI (`.github/workflows/ci.yml`) runs these on every pull request, then `pnpm check:contract` against the production frontend (the script table above says when it only warns).
+
+<h2>Deploy</h2>
+
+A push to `main` that touches content or sync code runs `.github/workflows/deploy-content.yml`:
+
+1. Run lint, typecheck and tests again.
+2. Stop if the files it deploys differ from the head of `main`: re-running an old deploy would roll content back, so revert instead.
+3. Check every post, drafts included, against the frontend's `/contract.json` (`pnpm check:contract --require`). A post that fails, or a frontend with no contract to give, stops the deploy here with the database untouched.
+4. Apply pending migrations (`drizzle-kit migrate`).
+5. Sync every post to Neon in one transaction.
+6. Revalidate the frontend: it reads the content through the API and expires its cache only when every read works. Anything but a 200 fails the deploy, and the site stays as it was (the statuses are in [the frontend's README](https://github.com/notbd/tianwei.io/blob/main/README.md), Revalidation API). Revalidate again a minute later, for any page that was rendering during the sync.
+7. Reconcile: parse the posts once, then check the frontend against them:
+   - the sitemap lists exactly the published posts;
+   - every URL in the sitemap answers 200, and each post page carries exactly one `post-body-sha256` tag, equal to the hash of the body synced in step 5, so a page still showing its previous version fails the deploy;
+   - `/feed.xml` and every published post's `/opengraph-image` answer 200;
+   - every draft's `/posts/<slug>` answers 404.
+
+   Each request has 60 s, the whole body included. A round collects every problem; if there are any, the round runs again 5 s later, up to three rounds in all. A failure names the URL and whether it answered an error, timed out or still shows a previous version (with the expected and the reported hash); the log keeps `x-vercel-cache` and `age` for every request.
+
+```mermaid
+%%{init: {"sequence": {"mirrorActors": false, "diagramMarginY": 72}}}%%
+sequenceDiagram
+  participant GH as Content deploy
+  participant FE as tianwei.io
+  participant API as tianwei-io-api
+  participant DB as Neon
+  GH->>FE: GET /contract.json
+  Note right of GH: a post that fails stops here
+  GH->>DB: migrate, then sync in one transaction
+  GH->>FE: POST /api/revalidate
+  FE->>API: read the list, posts, categories
+  API->>DB: SELECT
+  FE->>FE: expire posts if every read worked
+  FE-->>GH: 200, or 502 and the deploy fails
+  Note over GH,FE: the same again (step 6)
+  GH->>FE: GET every page, compare body hashes
+  FE-->>GH: 200 and the hash, 404 for drafts
+```
+
+Deploys run one at a time, so two syncs never interleave. What each check proves, and what it does not, is in [tianwei.io ADR-0006](https://github.com/notbd/tianwei.io/blob/main/docs/adr/0006-cross-repo-releases.md). A change that spans repos ships in the order that ADR sets, and is rehearsed first per [`release-verification.md`](https://github.com/notbd/tianwei.io/blob/main/docs/release-verification.md).
 
 <h2>License</h2>
 
-Source code is licensed under <a href='./LICENSE'>AGPLv3</a>,<br>
-The content is licensed under <a href='https://creativecommons.org/licenses/by-nc-sa/4.0/'>CC BY-NC-SA 4.0</a>.
+Source code is licensed under <a href='./LICENSE'>AGPLv3</a>.<br>
+The posts under <code>content/</code> are licensed under <a href='https://creativecommons.org/licenses/by-nc-sa/4.0/'>CC BY-NC-SA 4.0</a>.
 </samp>
