@@ -1,40 +1,38 @@
 /**
  * The content deploy's last step: makes the frontend serve what was just
- * synced, then proves every page renders.
+ * synced, then proves it does.
  *
- * 1. Revalidate: the frontend expires its content cache and re-fetches it.
+ * 1. Revalidate: the frontend reads the content through the API and, only
+ *    if every read worked, expires its content cache.
  * 2. A minute later, revalidate again. A page that was rendering while the
  *    sync committed may have read the old rows and stored its result after
- *    the first expiry, where it would stay until the next sync. Frontend
- *    renders give up after about 30 s (its fetcher's deadlines), so by now
- *    any such write has landed, and this expiry removes it.
- * 3. Request every page in the sitemap; anything but a 200 fails the deploy,
- *    so a page that does not render is reported at once.
+ *    the first expiry, where it would stay until the next sync. Such a
+ *    render ends within about 40 s of the sync (tianwei.io ADR-0002 says
+ *    why), so by now any such write has landed, and this expiry removes it.
+ * 3. Reconcile: every page answers, and each post page reports the hash of
+ *    the body synced here (src/frontend.ts reconcile). A page that failed
+ *    to render keeps serving its previous version with a 200, so only the
+ *    hash shows that a change did not go live.
  */
-import process from 'node:process'
 import { setTimeout as sleep } from 'node:timers/promises'
-import dotenv from 'dotenv'
-import { checkEveryPage, revalidateFrontend } from '../src/frontend.ts'
+import { loadLocalEnv, requireEnv } from '../src/env.ts'
+import { frontendFromEnv, reconcile, revalidateFrontend } from '../src/frontend.ts'
 
-dotenv.config({ path: '.env.local', quiet: true })
+loadLocalEnv()
 
 const SECOND_PASS_DELAY_MS = 60_000
 
-function requireEnv(name: string): string {
-  const value = process.env[name]
-  if (!value)
-    throw new Error(`[env] Missing required variable: ${name}`)
-  return value
-}
-
-const frontendUrl = new URL(requireEnv('FRONTEND_URL'))
+const frontend = frontendFromEnv()
 const secret = requireEnv('REVALIDATION_SECRET')
+console.info(`[revalidate] Frontend: ${frontend.origin}`)
 
-console.info('[revalidate] Success:', await revalidateFrontend(frontendUrl, secret))
+await revalidateFrontend(frontend, secret)
+console.info('[revalidate] Expired the posts tag')
 
 console.info(`[revalidate] Second pass in ${SECOND_PASS_DELAY_MS / 1000} s, after any render that read the old rows has stored its result`)
 await sleep(SECOND_PASS_DELAY_MS)
-console.info('[revalidate] Success:', await revalidateFrontend(frontendUrl, secret))
+await revalidateFrontend(frontend, secret)
+console.info('[revalidate] Expired the posts tag again')
 
-const pages = await checkEveryPage(frontendUrl)
-console.info(`[check] All ${pages.length} pages answered 200`)
+const checked = await reconcile(frontend)
+console.info(`[reconcile] All ${checked} requests answered as expected; every post page shows the synced body`)

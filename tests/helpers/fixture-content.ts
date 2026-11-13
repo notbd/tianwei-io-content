@@ -17,7 +17,7 @@ export function makeContentDir(files: Record<string, string>): string {
   return root
 }
 
-export interface FrontmatterOverrides {
+export type FrontmatterOverrides = {
   title?: string | undefined
   description?: string | undefined
   createdAt?: string | undefined

@@ -42,6 +42,7 @@ latent problems:
 
 - Every schema state is reproducible from git history; rollback is
   "restore branch, run migrate on a Neon branch to rehearse".
-- Contract evolution has a defined direction: the content engine migrates
-  first (additively), readers adopt afterwards.
+- Which repo ships a schema change first, for adding and dropping alike,
+  follows the rule in
+  [tianwei.io ADR-0006](https://github.com/notbd/tianwei.io/blob/main/docs/adr/0006-cross-repo-releases.md).
 - New categories are now just data: no schema involvement at all.

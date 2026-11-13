@@ -1,14 +1,17 @@
 /**
- * Production sync entry point (run by CI with DATABASE_URL set).
- * Performs a single transactional reconcile of the posts table
- * against the /content directory.
+ * Production sync entry point: one transactional reconcile of the posts
+ * table against the /content directory, on the database DATABASE_URL
+ * names. The deploy sets it from a secret; by hand it is typed for one
+ * command (`DATABASE_URL=... pnpm sync:prod`). Without it the script
+ * stops: there is no other database it could reach.
  */
 import process from 'node:process'
-import dotenv from 'dotenv'
 import { createDb } from '../src/db.ts'
+import { loadLocalEnv } from '../src/env.ts'
+import { messageOf } from '../src/errors.ts'
 import { syncPosts } from '../src/sync.ts'
 
-dotenv.config({ path: '.env.local', quiet: true })
+loadLocalEnv()
 
 console.info('[sync-prod] Starting production sync...')
 const { db, pool } = createDb()
@@ -23,7 +26,7 @@ try {
   console.info(`[sync-prod] Completed: ${result.upserted} upserted, ${result.deleted} deleted${deletions}`)
 }
 catch (err) {
-  console.error('[sync-prod] Sync failed (database unchanged):', (err as Error).message)
+  console.error('[sync-prod] Sync failed (database unchanged):', messageOf(err))
   process.exitCode = 1
 }
 finally {

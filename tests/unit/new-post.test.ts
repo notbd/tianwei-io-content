@@ -15,14 +15,14 @@ afterEach(() => {
 describe('todayInContentTimeZone', () => {
   it('is the date in New York, not in UTC or on this machine', () => {
     // 03:30 UTC on Nov 2 is still Nov 1 in New York
-    expect(todayInContentTimeZone(new Date('2026-11-02T03:30:00Z'))).toBe('2026-11-01')
-    expect(todayInContentTimeZone(new Date('2026-11-02T05:30:00Z'))).toBe('2026-11-02')
+    expect(todayInContentTimeZone(Temporal.Instant.from('2026-11-02T03:30:00Z'))).toBe('2026-11-01')
+    expect(todayInContentTimeZone(Temporal.Instant.from('2026-11-02T05:30:00Z'))).toBe('2026-11-02')
   })
 })
 
 describe('newPostFile', () => {
   it('derives the slug from the title and writes a draft the parser accepts', () => {
-    const { slug, text } = newPostFile('Hello, "World": A First Post', 'Tianwei Zhang', '2026-11-01')
+    const { slug, text } = newPostFile('Hello, "World": A First Post', 'Tianwei Zhang', '2026-11-01', new Set())
     expect(slug).toBe('hello-world-a-first-post')
 
     root = makeContentDir({ [`articles/${slug}.mdx`]: text })
@@ -40,7 +40,12 @@ describe('newPostFile', () => {
   })
 
   it('refuses a title with nothing to build a slug from, or one too long for the slug column', () => {
-    expect(() => newPostFile('???', 'A', '2026-11-01')).toThrow(/no letters or digits/)
-    expect(() => newPostFile('word '.repeat(45), 'A', '2026-11-01')).toThrow(/224-character slug \(max 200\)/)
+    expect(() => newPostFile('???', 'A', '2026-11-01', new Set())).toThrow(/no letters or digits/)
+    expect(() => newPostFile('word '.repeat(45), 'A', '2026-11-01', new Set())).toThrow(/224-character slug \(max 200\)/)
+  })
+
+  it('refuses a slug another post has, in any category', () => {
+    expect(() => newPostFile('Hello World', 'A', '2026-11-01', new Set(['hello-world'])))
+      .toThrow('[new-post] a post with the slug "hello-world" already exists')
   })
 })
