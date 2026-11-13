@@ -27,25 +27,25 @@
   },
   "dependencies": {
     "@mdx-js/mdx": "^3.1.1",
-    "@sindresorhus/slugify": "^3.0.1",
+    "@sindresorhus/slugify": "^4.0.0",
     "chokidar": "^6.0.0",
     "dotenv": "^18.0.9",
     "drizzle-orm": "^0.45.4",
-    "js-yaml": "^3.15.2",
+    "js-yaml": "^5.5.0",
     "pg": "^8.23.1",
     "remark-gfm": "^4.0.1",
     "zod": "^4.6.7"
   },
   "devDependencies": {
     "@antfu/eslint-config": "^10.0.0",
-    "@electric-sql/pglite": "^0.5.14",
-    "@types/js-yaml": "^3.12.10",
+    "@electric-sql/pglite": "^0.5.15",
+    "@types/js-yaml": "^4.0.9",
     "@types/mdast": "^4.0.4",
     "@types/node": "^26.6.6",
     "@types/pg": "^8.23.1",
     "drizzle-kit": "^0.31.11",
     "eslint": "^10.14.0",
-    "typescript": "^6.0.3",
-    "vitest": "^5.0.5"
+    "typescript": "^7.0.2",
+    "vitest": "^5.1.0"
   }
 }
