@@ -1,128 +1,37 @@
-import fs from 'node:fs'
 import path from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
-import { validateMdxFileStructure } from '../../src/parser.ts'
-import { makeContentDir, mdxDoc } from '../helpers/fixture-content.ts'
+import { describe, expect, it } from 'vitest'
+import { postLocation } from '../../src/parser.ts'
 
-let root = ''
-let root2 = ''
+// postLocation reads the path only: nothing here is on the disk
+const root = path.resolve('content-root')
 
-afterEach(() => {
-  for (const dir of [root, root2]) {
-    if (dir !== '')
-      fs.rmSync(dir, { recursive: true, force: true })
-  }
-  root = ''
-  root2 = ''
-})
-
-describe('validateMdxFileStructure', () => {
+describe('postLocation', () => {
   it('accepts {root}/{category}/{post}.mdx and derives category + slug', () => {
-    root = makeContentDir({
-      'articles/my-post.mdx': mdxDoc(),
-    })
-    const result = validateMdxFileStructure(path.join(root, 'articles/my-post.mdx'), root)
-    expect(result).toEqual({ ok: true, category: 'articles', slug: 'my-post' })
+    expect(postLocation(path.join(root, 'articles/my-post.mdx'), root)).toEqual({ category: 'articles', slug: 'my-post' })
   })
 
   it('slugifies human-readable file and folder names', () => {
-    root = makeContentDir({
-      'My Notes/Hello World.mdx': mdxDoc(),
-    })
-    const result = validateMdxFileStructure(path.join(root, 'My Notes/Hello World.mdx'), root)
-    expect(result).toEqual({ ok: true, category: 'my-notes', slug: 'hello-world' })
+    expect(postLocation(path.join(root, 'My Notes/Hello World.mdx'), root)).toEqual({ category: 'my-notes', slug: 'hello-world' })
   })
 
-  it('rejects nested paths deeper than {category}/{post}', () => {
-    root = makeContentDir({
-      'articles/drafts/deep.mdx': mdxDoc(),
-    })
-    const result = validateMdxFileStructure(path.join(root, 'articles/drafts/deep.mdx'), root)
-    expect(result).toMatchObject({
-      ok: false,
-      reason: expect.stringContaining('expected structure'),
-    })
-  })
+  const longName = 'a'.repeat(250)
+  const longCategory = 'c'.repeat(150)
 
-  it('rejects files at the content root', () => {
-    root = makeContentDir({
-      'floating.mdx': mdxDoc(),
-    })
-    const result = validateMdxFileStructure(path.join(root, 'floating.mdx'), root)
-    expect(result).toMatchObject({ ok: false })
+  it.each([
+    ['a path deeper than {category}/{post}', 'articles/drafts/deep.mdx', 'expected structure {content}/{category}/{post}.mdx, got "articles/drafts/deep.mdx"'],
+    ['a file at the content root', 'floating.mdx', 'expected structure {content}/{category}/{post}.mdx, got "floating.mdx"'],
+    ['a non-mdx extension', 'articles/readme.md', 'invalid file type "readme.md": expected an .mdx file'],
+    ['a filename that slugifies to an empty slug', 'articles/---.mdx', 'filename "---.mdx" slugifies to an empty slug'],
+    ['a category that slugifies to an empty string', '日本語/post.mdx', 'category "日本語" slugifies to an empty string'],
+    ['a slug longer than the slug column', `articles/${longName}.mdx`, `filename "${longName}.mdx" slugifies to a 250-char slug (max 200)`],
+    ['a category longer than the category column', `${longCategory}/post.mdx`, `category "${longCategory}" slugifies to 150 chars (max 100)`],
+  ])('rejects %s', (_name, file, reason) => {
+    const filePath = path.join(root, file)
+    expect(() => postLocation(filePath, root)).toThrow(`[parser] Invalid content path "${filePath}": ${reason}`)
   })
 
   it('rejects paths outside the content root', () => {
-    root = makeContentDir({
-      'articles/ok.mdx': mdxDoc(),
-    })
     const outside = path.join(root, '..', 'articles', 'escape.mdx')
-    const result = validateMdxFileStructure(outside, root)
-    expect(result).toMatchObject({
-      ok: false,
-      reason: expect.stringContaining('outside the content root'),
-    })
-  })
-
-  it('rejects non-mdx extensions', () => {
-    root = makeContentDir({
-      'articles/readme.md': mdxDoc(),
-    })
-    const result = validateMdxFileStructure(path.join(root, 'articles/readme.md'), root)
-    expect(result).toMatchObject({
-      ok: false,
-      reason: expect.stringContaining('.mdx'),
-    })
-  })
-
-  it('rejects a category that is a file, not a directory', () => {
-    root = makeContentDir({ articles: 'i am a file' })
-    const result = validateMdxFileStructure(path.join(root, 'articles/post.mdx'), root)
-    expect(result).toMatchObject({
-      ok: false,
-      reason: expect.stringContaining('not a directory'),
-    })
-  })
-
-  it('rejects names that slugify to empty strings', () => {
-    root = makeContentDir({
-      'articles/---.mdx': mdxDoc(),
-    })
-    expect(validateMdxFileStructure(path.join(root, 'articles/---.mdx'), root))
-      .toMatchObject({
-        ok: false,
-        reason: expect.stringContaining('empty slug'),
-      })
-
-    root2 = makeContentDir({
-      '日本語/post.mdx': mdxDoc(),
-    })
-    expect(validateMdxFileStructure(path.join(root2, '日本語/post.mdx'), root2))
-      .toMatchObject({
-        ok: false,
-        reason: expect.stringContaining('empty string'),
-      })
-  })
-
-  it('rejects slugs and categories exceeding the varchar column limits', () => {
-    const longName = 'a'.repeat(250)
-    root = makeContentDir({
-      [`articles/${longName}.mdx`]: mdxDoc(),
-    })
-    expect(validateMdxFileStructure(path.join(root, `articles/${longName}.mdx`), root))
-      .toMatchObject({
-        ok: false,
-        reason: expect.stringContaining('max 200'),
-      })
-
-    const longCategory = 'c'.repeat(150)
-    root2 = makeContentDir({
-      [`${longCategory}/post.mdx`]: mdxDoc(),
-    })
-    expect(validateMdxFileStructure(path.join(root2, `${longCategory}/post.mdx`), root2))
-      .toMatchObject({
-        ok: false,
-        reason: expect.stringContaining('max 100'),
-      })
+    expect(() => postLocation(outside, root)).toThrow(`path is outside the content root: "${outside}"`)
   })
 })

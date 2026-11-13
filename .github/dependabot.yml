@@ -5,6 +5,9 @@ updates:
     target-branch: dev
     schedule:
       interval: monthly
+    # skip releases younger than a week; security updates are not held back
+    cooldown:
+      default-days: 7
     groups:
       npm:
         patterns: ['*']
@@ -13,6 +16,9 @@ updates:
     target-branch: dev
     schedule:
       interval: monthly
+    # skip releases younger than a week; security updates are not held back
+    cooldown:
+      default-days: 7
     groups:
       github-actions:
         patterns: ['*']

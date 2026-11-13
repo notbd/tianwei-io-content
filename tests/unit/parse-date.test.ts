@@ -1,15 +1,9 @@
-import process from 'node:process'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { CONTENT_TIME_ZONE } from '../../src/config.ts'
-import { parseFrontmatterDate, zonedMidnight } from '../../src/date.ts'
-
-const ORIGINAL_TZ = process.env.TZ
+import { parseFrontmatterDate } from '../../src/date.ts'
 
 afterEach(() => {
-  if (ORIGINAL_TZ === undefined)
-    delete process.env.TZ
-  else
-    process.env.TZ = ORIGINAL_TZ
+  vi.unstubAllEnvs()
 })
 
 /** The calendar date an instant falls on in the content time zone. */
@@ -60,7 +54,7 @@ describe('parseFrontmatterDate', () => {
       'Pacific/Kiritimati',
     ]
     const results = timezones.map((tz) => {
-      process.env.TZ = tz
+      vi.stubEnv('TZ', tz)
       return parseFrontmatterDate('2025-01-31').getTime()
     })
     expect(new Set(results).size).toBe(1)
@@ -109,14 +103,5 @@ describe('parseFrontmatterDate', () => {
     ],
   ])('rejects non-string value %j', (value, message) => {
     expect(() => parseFrontmatterDate(value)).toThrow(message)
-  })
-})
-
-describe('zonedMidnight', () => {
-  it('computes zone-local midnight as a UTC instant', () => {
-    expect(zonedMidnight(2025, 1, 31, 'America/New_York').getTime()).toBe(Date.UTC(2025, 0, 31, 5))
-    expect(zonedMidnight(2025, 7, 1, 'America/New_York').getTime()).toBe(Date.UTC(2025, 6, 1, 4))
-    expect(zonedMidnight(2025, 7, 1, 'UTC').getTime()).toBe(Date.UTC(2025, 6, 1))
-    expect(zonedMidnight(2025, 7, 1, 'Asia/Shanghai').getTime()).toBe(Date.UTC(2025, 5, 30, 16))
   })
 })

@@ -3,7 +3,9 @@ import { defineConfig } from 'vitest/config'
 export default defineConfig({
   test: {
     include: ['tests/**/*.test.ts'],
-    // PGlite instances are cheap but not free; keep the default pool.
-    testTimeout: 20_000,
+    // each integration test boots PGlite and runs the migration chain first
+    testTimeout: 60_000,
+    // the PGlite database is created in a beforeEach; on a loaded machine that passes the 10 s default
+    hookTimeout: 60_000,
   },
 })

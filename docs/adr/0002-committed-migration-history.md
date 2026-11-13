@@ -5,7 +5,7 @@
 
 ## Context
 
-Production schema changes were applied with `drizzle-kit push` — a direct
+Production schema changes were applied with `drizzle-kit push`: a direct
 diff between code and the live database, with no committed history. Two
 latent problems:
 
@@ -13,7 +13,7 @@ latent problems:
    at schema-build time by scanning `content/`'s subdirectories**. Adding
    a category folder without regenerating and pushing the schema made
    sync fail at the database level. The schema depended on checkout
-   contents — non-deterministic by construction.
+   contents, non-deterministic by construction.
 2. `content` and `is_published` were nullable in this repo's schema while
    the API and frontend contracts require them non-null. The three repos
    had silently drifted.
@@ -23,15 +23,15 @@ latent problems:
 - Replace `db:push` with a **committed, ordered migration chain**
   (`drizzle-kit generate` + `migrate`; `drizzle/migrations/` including
   `meta/` is version-controlled):
-  - `0000` — idempotent baseline matching the introspected production
+  - `0000`: idempotent baseline matching the introspected production
     DDL, so the first `migrate` against the live database records a no-op.
-  - `0001` — `category` enum → `varchar(100)` (hand-added `USING` cast),
+  - `0001`: `category` enum → `varchar(100)` (hand-added `USING` cast),
     matching the API repo's declaration exactly and removing the dynamic
     enum.
-  - `0002` — backfill NULLs, then `SET NOT NULL` on `content` /
+  - `0002`: backfill NULLs, then `SET NOT NULL` on `content` /
     `is_published`, converging the database on what the readers already
     assume.
-  - `0003+` — additive, backward-compatible changes (e.g. `updated_at`).
+  - `0003+`: additive, backward-compatible changes (e.g. `updated_at`).
 - The schema file is fully static: no filesystem scanning, no environment
   dependence.
 - Migration correctness is tested in CI: the chain is applied to an
@@ -42,6 +42,7 @@ latent problems:
 
 - Every schema state is reproducible from git history; rollback is
   "restore branch, run migrate on a Neon branch to rehearse".
-- Contract evolution has a defined direction: the content engine migrates
-  first (additively), readers adopt afterwards.
-- New categories are now just data — no schema involvement at all.
+- Which repo ships a schema change first, for adding and dropping alike,
+  follows the rule in
+  [tianwei.io ADR-0006](https://github.com/notbd/tianwei.io/blob/main/docs/adr/0006-cross-repo-releases.md).
+- New categories are now just data: no schema involvement at all.

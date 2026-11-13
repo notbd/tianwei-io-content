@@ -29,7 +29,10 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
-      - uses: pnpm/action-setup@v6
+      # Third-party, so pinned to a commit (GitHub's own actions stay on
+      # tags): a moved tag cannot change the pnpm that later steps run. The
+      # pnpm version comes from packageManager.
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
       - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
@@ -51,8 +54,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
+      # Third-party, so pinned to a commit (GitHub's own actions stay on
+      # tags): a moved tag cannot change the pnpm that later steps run. The
+      # pnpm version comes from packageManager.
       - name: Setup pnpm
-        uses: pnpm/action-setup@v6
+        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
 
       - name: Setup Node.js
         uses: actions/setup-node@v7
@@ -62,6 +68,26 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      # The sync makes production match this checkout, so re-running an older
+      # run from the Actions UI would roll the content back to that commit (a
+      # re-run keeps its original GITHUB_SHA). Stop unless the files this
+      # deploy uses (the push trigger's paths) match the head of main; a later
+      # commit that changed only docs or tests does not block this one. Roll
+      # back with a revert instead.
+      - name: Refuse files that differ from the head of main
+        run: |
+          git fetch --depth=1 origin main
+          if ! git diff --quiet "$GITHUB_SHA" FETCH_HEAD -- content drizzle src scripts drizzle.config.ts .github/workflows/deploy-content.yml package.json pnpm-lock.yaml; then
+            echo "::error::main has changed the deployed files since $GITHUB_SHA; run the workflow from the head of main (Actions > Run workflow), or revert instead"
+            exit 1
+          fi
+
+      # Prove the frontend can render every post before anything is written:
+      # a post it cannot render, or a frontend with no contract to give,
+      # stops the deploy here with the database untouched.
+      - name: Check posts against the frontend's contract
+        run: pnpm check:contract --require
 
       - name: Apply migrations to Neon
         run: pnpm db:migrate
@@ -73,8 +99,11 @@ jobs:
         env:
           DATABASE_URL: ${{ secrets.PROD_REMOTE_DATABASE_URL }}
 
-      - name: Revalidate frontend cache
+      # Revalidate (the frontend reads the API first and expires nothing if
+      # that fails), revalidate again a minute later, then reconcile: every
+      # post page must report the hash of the body just synced. The frontend
+      # is https://tianwei.io, a constant in src/frontend.ts, not a secret.
+      - name: Revalidate the frontend and reconcile it with the content
         run: pnpm frontend:revalidate
         env:
-          FRONTEND_URL: ${{ secrets.FRONTEND_URL }}
           REVALIDATION_SECRET: ${{ secrets.REVALIDATION_SECRET }}

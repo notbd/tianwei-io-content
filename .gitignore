@@ -8,14 +8,11 @@
 # dependencies
 /node_modules
 
-# production
-/build
-
 # Ignore all .env files except `.env.example`
 .env*
 !.env.example
 
 # Drizzle
-# NOTE: drizzle/migrations/ (including meta/) is committed — it is the
+# NOTE: drizzle/migrations/ (including meta/) is committed; it is the
 # migration history the production database depends on.
 drizzle/.cache/
